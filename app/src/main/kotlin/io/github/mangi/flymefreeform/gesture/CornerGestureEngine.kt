@@ -20,6 +20,7 @@ internal enum class GesturePhase {
 internal sealed interface GestureAction {
     data object Ignore : GestureAction
     data object PassThrough : GestureAction
+    data object RequireRepeat : GestureAction
     data class Activate(
         val side: CornerSide,
         val originX: Float,
@@ -90,9 +91,22 @@ internal class CornerGestureEngine {
     private var originY = 0f
     private var side: CornerSide? = null
     private var claimed = false
+    private var requiresConfirmation = false
+    private var awaitingRepeat = false
+    private var confirmationSide: CornerSide? = null
+    private var confirmationTime = 0L
 
-    fun down(pointerId: Int, x: Float, y: Float, config: CornerGestureConfig): GestureAction {
+    fun down(
+        pointerId: Int,
+        x: Float,
+        y: Float,
+        config: CornerGestureConfig,
+        requiresConfirmation: Boolean = false,
+    ): GestureAction {
+        if (awaitingRepeat) resetConfirmation()
         reset()
+        this.requiresConfirmation = requiresConfirmation
+        if (!requiresConfirmation) resetConfirmation()
         val detectedSide = detectSide(x, y, config) ?: return GestureAction.PassThrough
         this.pointerId = pointerId
         originX = x
@@ -108,6 +122,7 @@ internal class CornerGestureEngine {
         x: Float,
         y: Float,
         config: CornerGestureConfig,
+        eventTime: Long = 0L,
     ): GestureAction {
         val activeSide = side ?: return GestureAction.PassThrough
         if (pointerId != this.pointerId || pointerCount != 1) return cancel()
@@ -117,11 +132,24 @@ internal class CornerGestureEngine {
         if (inward < -config.reverseTolerance || upward < -config.reverseTolerance) {
             return cancel()
         }
+        // 首次有效滑动只提示一次，余下的 MOVE/UP 不得显示菜单或提交选择。
+        if (awaitingRepeat) return GestureAction.Ignore
         if (!claimed) {
             if (inward < config.inwardThreshold || upward < config.upwardThreshold) {
                 return GestureAction.PassThrough
             }
             claimed = true
+            if (requiresConfirmation) {
+                val confirmed = confirmationSide == activeSide &&
+                    eventTime - confirmationTime in 0L..CONFIRMATION_TIMEOUT_MS
+                resetConfirmation()
+                if (!confirmed) {
+                    confirmationSide = activeSide
+                    confirmationTime = eventTime
+                    awaitingRepeat = true
+                    return GestureAction.RequireRepeat
+                }
+            }
             phase = GesturePhase.Revealing
             return GestureAction.Activate(activeSide, originX, originY, x, y)
         }
@@ -132,6 +160,10 @@ internal class CornerGestureEngine {
 
     fun up(pointerId: Int): GestureAction {
         if (pointerId != this.pointerId) return cancel()
+        if (awaitingRepeat) {
+            reset()
+            return GestureAction.Ignore
+        }
         if (!claimed) {
             reset()
             return GestureAction.PassThrough
@@ -143,6 +175,7 @@ internal class CornerGestureEngine {
     }
 
     fun cancel(): GestureAction {
+        if (awaitingRepeat) resetConfirmation()
         val wasClaimed = claimed
         clearTracking(if (wasClaimed) GesturePhase.Cancelling else GesturePhase.Idle)
         return if (wasClaimed) GestureAction.Cancel else GestureAction.PassThrough
@@ -154,6 +187,12 @@ internal class CornerGestureEngine {
 
     val isClaimed: Boolean
         get() = claimed
+
+    /** 环境或配置变化后，不得沿用旧环境中的确认机会。 */
+    fun resetConfirmation() {
+        confirmationSide = null
+        confirmationTime = 0L
+    }
 
     private fun detectSide(x: Float, y: Float, config: CornerGestureConfig): CornerSide? {
         return CornerTriggerRegion.detectSide(
@@ -179,5 +218,11 @@ internal class CornerGestureEngine {
         originY = 0f
         side = null
         claimed = false
+        requiresConfirmation = false
+        awaitingRepeat = false
+    }
+
+    private companion object {
+        const val CONFIRMATION_TIMEOUT_MS = 2_000L
     }
 }

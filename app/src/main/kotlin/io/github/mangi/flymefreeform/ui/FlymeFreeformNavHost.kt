@@ -44,6 +44,8 @@ internal fun FlymeFreeformNavHost(
     onHandleSwipeUpToMiniEnabledChange: (Boolean) -> Unit,
     onPauseInLandscapeChange: (Boolean) -> Unit,
     onPauseInGameModeChange: (Boolean) -> Unit,
+    onPreventMistouchInLandscapeChange: (Boolean) -> Unit,
+    onPreventMistouchInGameModeChange: (Boolean) -> Unit,
     onRequestScopes: () -> Unit,
     onPinnedComponentsChange: (List<ComponentName>) -> Unit,
     onInnerPinnedComponentsChange: (List<ComponentName>) -> Unit,
@@ -87,6 +89,8 @@ internal fun FlymeFreeformNavHost(
                             onHandleSwipeUpToMiniEnabledChange,
                         onPauseInLandscapeChange = onPauseInLandscapeChange,
                         onPauseInGameModeChange = onPauseInGameModeChange,
+                        onPreventMistouchInLandscapeChange = onPreventMistouchInLandscapeChange,
+                        onPreventMistouchInGameModeChange = onPreventMistouchInGameModeChange,
                         onRequestScopes = onRequestScopes,
                         onNavigateToPinnedApps = navigateToPinnedApps,
                     )

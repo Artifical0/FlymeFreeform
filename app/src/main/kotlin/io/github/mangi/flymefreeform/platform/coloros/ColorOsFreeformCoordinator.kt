@@ -22,6 +22,7 @@ import io.github.mangi.flymefreeform.config.ModulePreferences
 import io.github.mangi.flymefreeform.config.SharedSettings
 import java.util.ArrayDeque
 import io.github.mangi.flymefreeform.config.ToolCatalogCodec
+import android.widget.Toast
 import io.github.mangi.flymefreeform.config.ModuleSettingsSnapshot
 import io.github.mangi.flymefreeform.config.SharedStateProtocol
 import io.github.mangi.flymefreeform.gesture.AdaptiveCornerGestureConfig
@@ -59,6 +60,7 @@ internal class ColorOsFreeformCoordinator(
         )
     private val windowManager = context.getSystemService(WindowManager::class.java)
     private val gestureEngine = CornerGestureEngine()
+    private var repeatGestureToast: Toast? = null
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
     private val launcher = ColorOsFreeformLauncher(context)
     private val sidebar = ColorOsSidebarClient(context, handler, logger)
@@ -165,6 +167,9 @@ internal class ColorOsFreeformCoordinator(
     }
 
     private fun applySettings(settings: ModuleSettingsSnapshot) {
+        gestureEngine.resetConfirmation()
+        repeatGestureToast?.cancel()
+        repeatGestureToast = null
         val selectionChanged =
             settings.pinsSaved != lastSettings.pinsSaved ||
                 settings.pinnedComponents != lastSettings.pinnedComponents
@@ -340,7 +345,10 @@ internal class ColorOsFreeformCoordinator(
         val action =
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN ->
-                    gestureEngine.down(event.getPointerId(0), event.x, event.y, config)
+                    gestureEngine.down(
+                        event.getPointerId(0), event.x, event.y, config,
+                        requiresConfirmation = environmentState.requiresGestureConfirmation(),
+                    )
                 MotionEvent.ACTION_MOVE -> {
                     val index = event.findPointerIndex(event.getPointerId(0)).coerceAtLeast(0)
                     gestureEngine.move(
@@ -349,6 +357,7 @@ internal class ColorOsFreeformCoordinator(
                         event.getX(index),
                         event.getY(index),
                         config,
+                        eventTime = event.eventTime,
                     )
                 }
                 MotionEvent.ACTION_UP -> gestureEngine.up(event.getPointerId(event.actionIndex))
@@ -356,6 +365,8 @@ internal class ColorOsFreeformCoordinator(
                 else -> if (gestureEngine.isClaimed) gestureEngine.cancel() else GestureAction.Ignore
             }
         when (action) {
+            // SystemUI/桌面仍按普通角落手势拦截首次触摸；这里只阻止菜单生效，避免误触透传。
+            GestureAction.RequireRepeat -> showRepeatGestureToast()
             is GestureAction.Activate ->
                 showOverlay(
                     side = action.side,
@@ -376,11 +387,23 @@ internal class ColorOsFreeformCoordinator(
         }
     }
 
+    private fun showRepeatGestureToast() {
+        try {
+            repeatGestureToast?.cancel()
+            // 当前 Context 属于 system_server，不能用模块的资源 ID 查询宿主资源。
+            repeatGestureToast = Toast.makeText(context, "请再划一次", Toast.LENGTH_SHORT).also { it.show() }
+        } catch (exception: RuntimeException) {
+            logger(Log.WARN, "GESTURE_REPEAT_TOAST_FAILED", exception)
+        }
+    }
+
     private fun showOverlay(
         side: io.github.mangi.flymefreeform.gesture.CornerSide,
         x: Float,
         y: Float,
     ) {
+        repeatGestureToast?.cancel()
+        repeatGestureToast = null
         removeOverlay()
         morePanelActive = false
         val params = createOverlayParams(focusable = false)

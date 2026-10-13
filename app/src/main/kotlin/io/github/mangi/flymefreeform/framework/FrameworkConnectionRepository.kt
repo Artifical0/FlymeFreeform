@@ -132,6 +132,12 @@ internal class FrameworkConnectionRepository(
             )
         }
 
+    fun setPreventMistouchInLandscape(enabled: Boolean) =
+        updateSettings { it.copy(preventMistouchInLandscape = enabled) }
+
+    fun setPreventMistouchInGameMode(enabled: Boolean) =
+        updateSettings { it.copy(preventMistouchInGameMode = enabled) }
+
     fun setPinnedComponents(components: List<ComponentName>) =        updateSettings {
             it.copy(
                 pinsSaved = true,

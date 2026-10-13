@@ -47,6 +47,9 @@ internal object ModulePreferences {
     const val MIN_PANEL_SCALE_PERCENT = 50
     const val MAX_PANEL_SCALE_PERCENT = 100
 
+    const val KEY_PREVENT_MISTOUCH_IN_LANDSCAPE = "prevent_mistouch_in_landscape"
+    const val KEY_PREVENT_MISTOUCH_IN_GAME_MODE = "prevent_mistouch_in_game_mode"
+    const val DEFAULT_PREVENT_MISTOUCH = false
     const val DEFAULT_ENABLED = false
     const val DEFAULT_CORNER_ENABLED = true
     const val DEFAULT_CORNER_TRIGGER_RANGE_DP = 84
