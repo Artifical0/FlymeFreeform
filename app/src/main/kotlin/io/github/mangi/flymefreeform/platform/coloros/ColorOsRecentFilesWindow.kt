@@ -6,6 +6,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
+import android.view.DragEvent
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -63,6 +64,7 @@ internal class ColorOsRecentFilesWindow(
     private var entering = true
     private var animationStart = 0L
     private var durationScale = 1f
+    private var dragging = false
     private val animation = Runnable { animateFrame() }
     private val timeout = Runnable { dismiss() }
 
@@ -77,8 +79,36 @@ internal class ColorOsRecentFilesWindow(
     private val root = object : FrameLayout(context) {
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             if (exiting || entering) return true
+            // @author bomo 非模态窗口通过一次 ACTION_OUTSIDE 收起，事件本身仍由系统投递给下层应用。
+            if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) {
+                if (!dragging) dismiss()
+                return true
+            }
             resetTimeout()
             return super.dispatchTouchEvent(event)
+        }
+
+        /**
+         * @author bomo 观察本窗口发起的拖拽；返回 true 注册开始/结束通知，窗口内放下视为取消。
+         * @param event 系统拖拽事件；其他窗口发起的拖拽保持父类行为。
+         * @return 本窗口拖拽是否由根视图接收；不主动发送文件或授予额外权限。
+         */
+        override fun onDragEvent(event: DragEvent): Boolean {
+            if (event.action == DragEvent.ACTION_DRAG_STARTED) {
+                val source = event.localState as? View
+                if (source?.rootView !== this) return super.onDragEvent(event)
+                dragging = true
+                removeCallbacks(timeout)
+                log(Log.INFO, "RECENT_FILES_DRAG_STARTED windowFlags=0x${(layoutParams as? WindowManager.LayoutParams)?.flags?.toString(16)}", null)
+                return true
+            }
+            if (!dragging) return super.onDragEvent(event)
+            if (event.action == DragEvent.ACTION_DRAG_ENDED) {
+                dragging = false
+                log(Log.INFO, "RECENT_FILES_DRAG_ENDED accepted=${event.result}", null)
+                resetTimeout()
+            }
+            return true
         }
 
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -133,6 +163,9 @@ internal class ColorOsRecentFilesWindow(
         val params = WindowManager.LayoutParams(
             scaledWidth, scaledHeight, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                // @author bomo 原先的模态窗口会在边界外继续成为拖拽落点，阻断下层 QQ 接收。
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT,
         ).apply {
@@ -167,6 +200,7 @@ internal class ColorOsRecentFilesWindow(
     fun dispose() {
         if (closed) return
         closed = true
+        dragging = false
         root.removeCallbacks(animation)
         root.removeCallbacks(timeout)
         if (attached) {
@@ -400,6 +434,7 @@ internal class ColorOsRecentFilesWindow(
 
     private fun resetTimeout() {
         root.removeCallbacks(timeout)
+        if (dragging || closed || exiting) return
         root.postDelayed(timeout, AUTO_DISMISS_MS)
     }
 

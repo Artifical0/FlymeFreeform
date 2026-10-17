@@ -316,7 +316,8 @@ internal class SidebarHookInstaller(private val module: XposedModule, private va
                 }
                 log(
                     Log.INFO,
-                    "DRAG_START raw=$raw flags=$flags cfg=$cfg patch=$patch " +
+                    "DRAG_START raw=$raw flags=$flags cfg=$cfg patch=$patch changed=${flags != raw} " +
+                        "global=${flags and View.DRAG_FLAG_GLOBAL != 0} uriRead=${flags and View.DRAG_FLAG_GLOBAL_URI_READ != 0} " +
                         "items=${clip?.itemCount ?: -1} types=[$types] " +
                         "uri=${clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri} " +
                         "view=${view?.javaClass?.simpleName} attached=${view?.isAttachedToWindow}",
@@ -341,6 +342,11 @@ internal class SidebarHookInstaller(private val module: XposedModule, private va
     }
 
     /**
+     * @author bomo 2026-10-17 核验更正：下方为前序排查记录，数值解释已被 SDK 37 与实机日志证伪。
+     * URI_READ=0x1、URI_WRITE=0x2、GLOBAL=0x100、OPAQUE=0x200、SAME_APPLICATION=0x1000。
+     * 原厂 771(0x303) 已含跨应用读写权限，本函数对此返回原值是正常的幂等结果；
+     * cfg=1 / patch=true / changed=false 不表示补丁未执行。仅保留此规范化逻辑供既有对照开关使用。
+     *
      * @author bomo 补上跨应用拖拽所缺的权限标志。
      *
      * 实测（0.2.16 埋点）原厂发起的是 `flags=771`，即
