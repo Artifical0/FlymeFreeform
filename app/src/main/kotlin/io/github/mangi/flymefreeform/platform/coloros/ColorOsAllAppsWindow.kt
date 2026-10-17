@@ -244,6 +244,8 @@ internal class ColorOsAllAppsWindow(
         if (closed) return true
         if (!waitingForFirstFrame) return true
         gateFrames++
+        // @author bomo 每帧重新评估当前阻塞条件，已恢复的布局/数据不能永久卡住首帧。
+        gateReasons.clear()
         return try {
             // 卡片按原生面板尺寸（自身 LayoutParams）布局完成即就绪；窗口已缩小，不能再与窗口尺寸比较。
             val cardParams = card.layoutParams as FrameLayout.LayoutParams

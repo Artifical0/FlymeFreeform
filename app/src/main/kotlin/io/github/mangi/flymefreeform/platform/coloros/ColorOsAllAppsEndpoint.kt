@@ -47,6 +47,8 @@ internal class ColorOsAllAppsEndpoint(
     private var toolCatalogPublished = false
     /** [encodedToolCatalog] 的缓存；目录可能随侧边栏版本更新变化，进程内视为不变。 */
     private var encodedToolCatalogCache: String? = null
+    /** @author bomo 缓存仅覆盖编码结果；包变化、配置变化或低内存会使其失效。 */
+    private var encodedToolCount = 0
     private var request: Request? = null
     private var lastResult: Pair<String, Int>? = null
     private var disposed = false
@@ -64,13 +66,17 @@ internal class ColorOsAllAppsEndpoint(
     }
     private val packages = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            invalidateToolCatalog()
             handler.removeCallbacks(refresh)
             handler.postDelayed(refresh, 300L)
         }
     }
     private val components = object : ComponentCallbacks {
-        override fun onConfigurationChanged(newConfig: Configuration) = cancel()
-        @Suppress("OVERRIDE_DEPRECATION") override fun onLowMemory() = Unit
+        override fun onConfigurationChanged(newConfig: Configuration) {
+            invalidateToolCatalog()
+            cancel()
+        }
+        @Suppress("OVERRIDE_DEPRECATION") override fun onLowMemory() = invalidateToolCatalog()
     }
 
     val binder: IBinder get() = messenger.binder
@@ -79,6 +85,16 @@ internal class ColorOsAllAppsEndpoint(
         environment.start(service)
         environment.observe { if (!environment.isGestureAllowed()) cancel() }
         configuration.observe(settingsObserver)
+        // @author bomo 目录缓存在会话间复用，失效监听必须覆盖服务整个生命周期，不能仅在面板打开时注册。
+        service.registerReceiver(packages, IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addDataScheme("package")
+        }, Context.RECEIVER_NOT_EXPORTED)
+        watchingPackages = true
+        service.registerComponentCallbacks(components)
+        watchingConfiguration = true
         // 侧边栏进程启动即可发布工具目录，让设置界面的「添加应用」能列出工具。
         handler.post(::publishToolCatalog)
     }
@@ -93,9 +109,7 @@ internal class ColorOsAllAppsEndpoint(
     private fun publishToolCatalog(force: Boolean = false) {
         if (toolCatalogPublished && !force) return
         try {
-            val records = toolCatalog.build()
-            if (records.isEmpty()) return
-            val encoded = ToolCatalogCodec.encode(records)
+            val encoded = encodedToolCatalog() ?: return
             service.sendBroadcast(
                 Intent(SharedStateProtocol.ACTION)
                     .setPackage(SharedStateProtocol.MODULE_PACKAGE)
@@ -108,7 +122,7 @@ internal class ColorOsAllAppsEndpoint(
             request?.reply?.let { reply ->
                 runCatching { reply.send(SidebarProtocol.catalogMessage(encoded, Process.SYSTEM_UID)) }
             }
-            log(Log.INFO, "TOOL_CATALOG_PUBLISHED count=${records.size}", null)
+            log(Log.INFO, "TOOL_CATALOG_PUBLISHED count=$encodedToolCount", null)
         } catch (exception: Exception) {
             log(Log.WARN, "TOOL_CATALOG_PUBLISH_FAILED", exception)
         }
@@ -122,11 +136,21 @@ internal class ColorOsAllAppsEndpoint(
      */
     private fun encodedToolCatalog(): String? {
         encodedToolCatalogCache?.let { return it }
+        val startedAt = SystemClock.uptimeMillis()
         val records = toolCatalog.build()
         if (records.isEmpty()) return null
         val encoded = ToolCatalogCodec.encode(records)
         encodedToolCatalogCache = encoded
+        encodedToolCount = records.size
+        log(Log.INFO, "TOOL_CATALOG_ENCODED count=$encodedToolCount ms=${SystemClock.uptimeMillis() - startedAt}", null)
         return encoded
+    }
+
+    /** @author bomo 清理工具编码缓存；下次目录请求重新枚举可用性、名称及图标，不持有过期应用数据。 */
+    private fun invalidateToolCatalog() {
+        encodedToolCatalogCache = null
+        encodedToolCount = 0
+        toolCatalogPublished = false
     }
 
     fun onUnbound(id: String?) {
@@ -163,6 +187,9 @@ internal class ColorOsAllAppsEndpoint(
         if (disposed) return
         disposed = true
         cancel()
+        if (watchingPackages) { watchingPackages = false; service.unregisterReceiver(packages) }
+        if (watchingConfiguration) { watchingConfiguration = false; service.unregisterComponentCallbacks(components) }
+        invalidateToolCatalog()
         handler.removeCallbacksAndMessages(null)
         configuration.removeObserver(settingsObserver)
         environment.close()
@@ -176,12 +203,12 @@ internal class ColorOsAllAppsEndpoint(
             if (message.what == SidebarProtocol.REQUEST_TOOL_CATALOG) {
                 val replyTo = message.replyTo
                 if (replyTo != null && data.getInt(SidebarProtocol.TARGET_UID, -1) == Process.myUid()) {
-                    val records = toolCatalog.build()
-                    if (records.isNotEmpty()) {
+                    val encoded = encodedToolCatalog()
+                    if (encoded != null) {
                         runCatching {
-                            replyTo.send(SidebarProtocol.catalogMessage(ToolCatalogCodec.encode(records), Process.myUid()))
+                            replyTo.send(SidebarProtocol.catalogMessage(encoded, Process.myUid()))
                         }
-                        log(Log.INFO, "TOOL_CATALOG_SERVED count=${records.size}", null)
+                        log(Log.INFO, "TOOL_CATALOG_SERVED count=$encodedToolCount", null)
                     }
                 }
                 return@safely
@@ -306,6 +333,7 @@ internal class ColorOsAllAppsEndpoint(
      * @param panelLeftSide 本次呼出方位（null = 未下发，回退原厂标志位）。
      */
     private fun prepare(id: String, deadline: Long, panelLeftSide: Boolean?, reply: Messenger) {
+        val startedAt = SystemClock.uptimeMillis()
         // @author bomo 呼出面板时尝试刷新配置快照。实测（2026-09-23）：LSPosed 远端偏好
         // 的读取是 start() 时的**进程内缓存**，此调用当前拿不到新值；设置的生效时机 =
         // Hook 进程重启（重装 / 服务重连 / 重启手机）。保留调用，将来 LSPosed 修复
@@ -328,15 +356,6 @@ internal class ColorOsAllAppsEndpoint(
             addAction(SidebarProtocol.ACTION_USER_SWITCHED)
         }, Context.RECEIVER_NOT_EXPORTED)
         watching = true
-        service.registerReceiver(packages, IntentFilter().apply {
-            addAction(Intent.ACTION_PACKAGE_ADDED)
-            addAction(Intent.ACTION_PACKAGE_REMOVED)
-            addAction(Intent.ACTION_PACKAGE_CHANGED)
-            addDataScheme("package")
-        }, Context.RECEIVER_NOT_EXPORTED)
-        watchingPackages = true
-        service.registerComponentCallbacks(components)
-        watchingConfiguration = true
         next.content = ColorOsAllAppsContent(
             loader,
             leftSideOverride = panelLeftSide,
@@ -365,6 +384,7 @@ internal class ColorOsAllAppsEndpoint(
         // 每次面板打开都重发：App 可能在上一次发布时还没起来（装完是 stopped 态），
         // 一次性标志会让目录永远补不上。
         publishToolCatalog(force = true)
+        log(Log.INFO, "PANEL_PREPARED ms=${SystemClock.uptimeMillis() - startedAt}", null)
         advance()
     }
 
@@ -426,8 +446,6 @@ internal class ColorOsAllAppsEndpoint(
         cleanup { current.window?.dispose() ?: current.content?.close() }
         if (current.deathLinked) cleanup { current.reply.binder.unlinkToDeath(current.death, 0) }
         if (watching) { watching = false; cleanup { service.unregisterReceiver(receiver) } }
-        if (watchingPackages) { watchingPackages = false; cleanup { service.unregisterReceiver(packages) } }
-        if (watchingConfiguration) { watchingConfiguration = false; cleanup { service.unregisterComponentCallbacks(components) } }
         val finalResult = if (cleaned && !(current.exitStarted && result == SidebarProtocol.CLEANED)) result else SidebarProtocol.ABORTED
         lastResult = current.id to finalResult
         send(current.reply, current.id, finalResult)

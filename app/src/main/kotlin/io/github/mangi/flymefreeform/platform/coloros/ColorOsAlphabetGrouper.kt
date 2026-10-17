@@ -1,6 +1,7 @@
 package io.github.mangi.flymefreeform.platform.coloros
 
 import android.util.Log
+import android.os.SystemClock
 import android.widget.TextView
 import java.lang.reflect.Method
 import java.text.Collator
@@ -62,6 +63,9 @@ internal class ColorOsAlphabetGrouper(
      * 幂等：已含标记项的列表直接跳过。
      */
     fun regroupAll(search: Any) {
+        val startedAt = SystemClock.uptimeMillis()
+        // @author bomo 排序比较器不再重复反射标签、反复转拼音；四个列表共享本次转换结果。
+        val keys = AlphabetSortKeyCache(::groupLetter, ::sortKey)
         var groupedApps = -1
         var letters = 0
         for (getterName in LIST_GETTERS) {
@@ -69,39 +73,40 @@ internal class ColorOsAlphabetGrouper(
                 search.javaClass.getMethod(getterName).invoke(search) as? MutableList<Any?>
             }.getOrNull() ?: continue
             if (list.isEmpty()) continue
-            val result = regroup(list)
+            val result = regroup(list, keys)
             if (result != null && groupedApps < 0) {
                 groupedApps = result.first
                 letters = result.second
             }
         }
         if (groupedApps >= 0) {
-            log(Log.INFO, "ALPHABET_GROUPED apps=$groupedApps letters=$letters", null)
+            log(Log.INFO, "ALPHABET_GROUPED apps=$groupedApps letters=$letters labels=${keys.size} ms=${SystemClock.uptimeMillis() - startedAt}", null)
         }
     }
 
     /**
      * 分组改写单个列表。返回 (应用数, 字母组数)；跳过（已分组/无应用段/应用太少）返回 null。
      */
-    private fun regroup(list: MutableList<Any?>): Pair<Int, Int>? {
+    private fun regroup(list: MutableList<Any?>, keys: AlphabetSortKeyCache): Pair<Int, Int>? {
         if (list.any { isLetterHeader(it) }) return null
         val headerIndex = list.indexOfFirst { isAppSectionHeader(it) }
         if (headerIndex < 0) return null
         val apps = list.subList(headerIndex + 1, list.size).filterNotNull()
         if (apps.size < MIN_GROUP_APP_COUNT) return null
-        val sorted = apps.sortedWith { left, right -> compareItems(labelOf(left), labelOf(right)) }
+        val sorted = apps.map { it to keys.get(labelOf(it)) }
+            .sortedWith { left, right -> compareItems(left.second, right.second) }
         val tail = list.subList(headerIndex + 1, list.size)
         tail.clear()
         var groups = 0
         var index = 0
         while (index < sorted.size) {
-            val letter = groupLetter(labelOf(sorted[index]))
+            val letter = sorted[index].second.letter
             val header = titleCtor.newInstance(letter.toString(), HEADER_KEY_PREFIX + letter)
             setViewType.invoke(header, appTableApp)
             tail.add(header)
             groups++
-            while (index < sorted.size && groupLetter(labelOf(sorted[index])) == letter) {
-                tail.add(sorted[index])
+            while (index < sorted.size && sorted[index].second.letter == letter) {
+                tail.add(sorted[index].first)
                 index++
             }
         }
@@ -157,14 +162,14 @@ internal class ColorOsAlphabetGrouper(
         runCatching { (getText.invoke(item) as? CharSequence)?.toString() }.getOrNull().orEmpty()
 
     /** 比较两个标签：先按首字母组（'#' 最后），组内按拼音排序键，再退回中文 Collator。 */
-    private fun compareItems(left: String, right: String): Int {
-        val la = groupLetter(left)
-        val lb = groupLetter(right)
+    private fun compareItems(left: AlphabetSortKeyCache.Key, right: AlphabetSortKeyCache.Key): Int {
+        val la = left.letter
+        val lb = right.letter
         if (la != lb) return letterOrder(la) - letterOrder(lb)
-        val ka = sortKey(left)
-        val kb = sortKey(right)
+        val ka = left.sortKey
+        val kb = right.sortKey
         if (ka.isNotEmpty() && kb.isNotEmpty() && ka != kb) return ka.compareTo(kb)
-        return collator.compare(left, right)
+        return collator.compare(left.label, right.label)
     }
 
     /** '#' 排在 Z 之后。 */
