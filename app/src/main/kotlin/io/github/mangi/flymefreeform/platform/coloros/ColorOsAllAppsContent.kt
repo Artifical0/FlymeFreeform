@@ -230,10 +230,10 @@ internal class ColorOsAllAppsContent(
     /** @author bomo 索引与最近小窗都就绪后按呼出方向避让；无返回值，布局参数不兼容时记录诊断。 */
     private fun reserveRecentIndexInset() {
         if (!alphabetAttached || !recentAttached) return
+        val surface = card ?: return
         val left = leftSide()
-        val inset = if (left) ColorOsAlphabetIndex.RIGHT_CONTENT_INSET_DP
-            else ColorOsAlphabetIndex.RECENT_SECTION_RIGHT_INSET_DP
-        if (!recentSection.reserveIndexInset(inset, left)) {
+        val inset = ColorOsAlphabetIndex.RECENT_SECTION_INDEX_INSET_DP
+        if (!recentSection.reserveIndexInset(inset, left, surface)) {
             log(Log.WARN, "RECENT_SECTION_INDEX_INSET_FAILED", null)
         }
     }

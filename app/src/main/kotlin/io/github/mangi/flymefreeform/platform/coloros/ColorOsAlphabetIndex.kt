@@ -117,12 +117,6 @@ internal class ColorOsAlphabetIndex(
             return false
         }
         this.leftSide = leftSide
-        if (leftSide) {
-            // @author bomo 左缘原本紧邻标题和第一列；用内容留白避让，保留原厂相对marginStart及其他布局参数。
-            originalListPadding = Rect(recycler.paddingLeft, recycler.paddingTop, recycler.paddingRight, recycler.paddingBottom)
-            recycler.setPadding(recycler.paddingLeft + dp(RIGHT_CONTENT_INSET_DP),
-                recycler.paddingTop, recycler.paddingRight, recycler.paddingBottom)
-        }
         val barView = AlphabetIndexBar(context).apply {
             // Flyme 风格：常驻完整字母表，无应用的字母置灰。
             this.letters = ALL_LETTERS
@@ -165,6 +159,35 @@ internal class ColorOsAlphabetIndex(
             card.addView(this, popupParams)
         }
         popup = popupView
+        // @author bomo 左缘原本紧邻标题和第一列；用内容留白避让，保留原厂相对marginStart及其他布局参数。
+        // @author bomo 左右索引使用相同的内容边缘间距，按当前物理侧扣除原厂margin和padding后补齐。
+        originalListPadding = Rect(
+            recycler.paddingLeft,
+            recycler.paddingTop,
+            recycler.paddingRight,
+            recycler.paddingBottom,
+        )
+        val listMargins = recycler.layoutParams as? ViewGroup.MarginLayoutParams
+        val sideMargin = (if (leftSide) listMargins?.leftMargin else listMargins?.rightMargin)
+            ?.coerceAtLeast(0) ?: 0
+        val sidePadding = if (leftSide) recycler.paddingLeft else recycler.paddingRight
+        val addedInset = (dp(INDEX_CONTENT_EDGE_INSET_DP) - sideMargin - sidePadding)
+            .coerceAtLeast(0)
+        if (leftSide) {
+            recycler.setPadding(
+                recycler.paddingLeft + addedInset,
+                recycler.paddingTop,
+                recycler.paddingRight,
+                recycler.paddingBottom,
+            )
+        } else {
+            recycler.setPadding(
+                recycler.paddingLeft,
+                recycler.paddingTop,
+                recycler.paddingRight + addedInset,
+                recycler.paddingBottom,
+            )
+        }
         attached = true
         updatePlacement()
         log(Log.INFO, "ALPHABET_INDEX_ATTACHED letters=${letterMap.size} side=${if (leftSide) "left" else "right"}", null)
@@ -534,6 +557,12 @@ internal class ColorOsAlphabetIndex(
         const val BAR_WIDTH_DP = 28
         const val BAR_MARGIN_DP = 2
 
+        /** @author bomo 索引与应用列表内容之间的可见安全间隔，按右侧原有边缘留白统一布局。 */
+        const val INDEX_CONTENT_GAP_DP = 4
+
+        /** @author bomo 内容区为索引条预留的右侧宽度，包含索引宽度、贴边距和安全间隔；现作为两侧共用边距。 */
+        const val INDEX_CONTENT_EDGE_INSET_DP = BAR_WIDTH_DP + BAR_MARGIN_DP + INDEX_CONTENT_GAP_DP
+
         /** @author bomo Flyme 风格圆形气泡直径与字号。 */
         const val POPUP_SIZE_DP = 56
         const val POPUP_TEXT_SP = 22f
@@ -542,11 +571,8 @@ internal class ColorOsAlphabetIndex(
         /** @author bomo 常驻完整字母表：A-Z + '#'（与 Flyme 一致；无应用的字母置灰）。 */
         val ALL_LETTERS: List<Char> = ('A'..'Z').toList() + '#'
 
-        /** @author bomo 内容区为索引条预留的右侧宽度，包含索引宽度、贴边距和安全间隔。 */
-        const val RIGHT_CONTENT_INSET_DP = BAR_WIDTH_DP + BAR_MARGIN_DP + POPUP_GAP_DP
-
-        /** @author bomo 最近小窗行右侧预留宽度，保持与下方网格接近的可见范围。 */
-        const val RECENT_SECTION_RIGHT_INSET_DP = 24
+        /** @author bomo 最近小窗行右侧预留宽度，保持与下方网格接近的可见范围；左右呼出共用该值。 */
+        const val RECENT_SECTION_INDEX_INSET_DP = 24
 
         /** Flyme 风格气泡：浅灰圆底 + 深灰字母。 */
         val POPUP_BG_COLOR = Color.parseColor("#EDF2F2F2")
