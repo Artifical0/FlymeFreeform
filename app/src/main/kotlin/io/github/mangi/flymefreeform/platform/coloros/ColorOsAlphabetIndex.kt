@@ -51,9 +51,10 @@ internal class ColorOsAlphabetIndex(
         getEntry?.returnType?.getMethod("getType")
     }.getOrNull()
 
-    private val transliterator = runCatching {
-        android.icu.text.Transliterator.getInstance("Han-Latin")
-    }.getOrNull()
+    // @author bomo 正常分组路径直接读取标题标记，只有拼音回退路径才创建 ICU 转换器。
+    private val transliterator by lazy {
+        runCatching { android.icu.text.Transliterator.getInstance("Han-Latin") }.getOrNull()
+    }
 
     /** RecyclerView 类引用（延迟加载），用于 isInstance 判断以覆盖子类。 */
     private val recyclerViewClass: Class<*>? by lazy {
@@ -83,6 +84,9 @@ internal class ColorOsAlphabetIndex(
     private var popup: TextView? = null
     private var recyclerView: View? = null
     private var attached = false
+    private var hostCard: FrameLayout? = null
+    private var searchAnchor: View? = null
+    private val placementListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updatePlacement() }
 
     /** 应用条目数少于此阈值时不显示索引条（与分组器阈值一致）。 */
     private val minAppCount = ColorOsAlphabetGrouper.MIN_GROUP_APP_COUNT
@@ -119,11 +123,16 @@ internal class ColorOsAlphabetIndex(
             this.onTouchEnd = { popup?.visibility = View.GONE }
         }
         val params = FrameLayout.LayoutParams(dp(BAR_WIDTH_DP), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            gravity = Gravity.END or Gravity.TOP
             rightMargin = dp(BAR_MARGIN_DP)
         }
+        barView.visibility = View.INVISIBLE
         card.addView(barView, params)
         bar = barView
+        hostCard = card
+        searchAnchor = findByIdName(panelView, SEARCH_VIEW_ID)
+        card.addOnLayoutChangeListener(placementListener)
+        searchAnchor?.addOnLayoutChangeListener(placementListener)
 
         // Flyme 风格圆形大字气泡：初始隐藏，触摸时在触点字母高度的左侧浮出。
         val popupView = TextView(context).apply {
@@ -144,18 +153,23 @@ internal class ColorOsAlphabetIndex(
         }
         popup = popupView
         attached = true
+        updatePlacement()
         log(Log.INFO, "ALPHABET_INDEX_ATTACHED letters=${letterMap.size}", null)
         return true
     }
 
     /** 面板关闭时清理。 */
     fun detach() {
+        hostCard?.removeOnLayoutChangeListener(placementListener)
+        searchAnchor?.removeOnLayoutChangeListener(placementListener)
         bar?.let { (it.parent as? ViewGroup)?.removeView(it) }
         popup?.let { (it.parent as? ViewGroup)?.removeView(it) }
         bar = null
         popup = null
         recyclerView = null
         attached = false
+        hostCard = null
+        searchAnchor = null
     }
 
     /** 数据刷新后重建索引（包安装/卸载触发）。 */
@@ -166,6 +180,31 @@ internal class ColorOsAlphabetIndex(
     }
 
     // ── 内部实现 ──
+
+    /** @author bomo 按实际搜索框底部定位索引；空间不足收缩字母槽位，锚点缺失时不覆盖搜索区域。 */
+    private fun updatePlacement() {
+        val card = hostCard ?: return
+        val barView = bar ?: return
+        val search = searchAnchor
+        if (card.height <= 0 || search == null || !search.isLaidOut) {
+            barView.visibility = View.INVISIBLE
+            return
+        }
+        val bounds = Rect()
+        search.getDrawingRect(bounds)
+        card.offsetDescendantRectToMyCoords(search, bounds)
+        val placement = AlphabetIndexBounds.calculate(
+            card.height, bounds.bottom, barView.preferredHeight(), dp(SEARCH_GAP_DP), dp(BOTTOM_MARGIN_DP),
+        )
+        val params = barView.layoutParams as FrameLayout.LayoutParams
+        if (params.topMargin != placement.top || params.height != placement.height) {
+            params.topMargin = placement.top
+            params.height = placement.height
+            barView.layoutParams = params
+            log(Log.INFO, "ALPHABET_INDEX_BOUNDS searchBottom=${bounds.bottom} top=${placement.top} height=${placement.height} cardHeight=${card.height}", null)
+        }
+        barView.visibility = if (placement.height > 0) View.VISIBLE else View.INVISIBLE
+    }
 
     private fun findRecyclerView(panelView: ViewGroup): View? {
         // 优先按资源 id 直查（与 ColorOsRecentSection 同一模式）。
@@ -371,12 +410,21 @@ internal class ColorOsAlphabetIndex(
             val perLetter = dp(PER_LETTER_DP)
             val h = (letters.size * perLetter + dp(VERTICAL_PADDING_DP) * 2)
                 .coerceAtLeast(perLetter)
-            setMeasuredDimension(w, h)
+            setMeasuredDimension(resolveSize(w, widthMeasureSpec), resolveSize(h, heightMeasureSpec))
         }
+
+        /** @author bomo 返回正常字母间距下的理想高度；外部布局可约束到搜索框下方的剩余空间。 */
+        fun preferredHeight(): Int = letters.size * dp(PER_LETTER_DP) + dp(VERTICAL_PADDING_DP) * 2
+
+        /** @author bomo 小高度时缩小上下内边距，为所有字母保留正的槽位高度。 */
+        private fun verticalPadding(): Float = dp(VERTICAL_PADDING_DP).toFloat().coerceAtMost(height / 4f)
+
+        /** @author bomo 绘制与命中检测共用实际槽位高度，避免收缩后触点和字母错位。 */
+        private fun slotHeight(): Float = if (letters.isEmpty()) 0f else (height - 2f * verticalPadding()) / letters.size
 
         /** 槽位中心在本视图内的 Y 坐标。 */
         private fun slotCenter(index: Int): Float =
-            dp(VERTICAL_PADDING_DP) + index * dp(PER_LETTER_DP) + dp(PER_LETTER_DP) / 2f
+            verticalPadding() + (index + 0.5f) * slotHeight()
 
         override fun onDraw(canvas: Canvas) {
             if (letters.isEmpty()) return
@@ -387,9 +435,9 @@ internal class ColorOsAlphabetIndex(
                 val enabled = enabledLetters.contains(letter)
                 if (active) {
                     // Flyme 风格：当前字母带圆形高亮底。
-                    canvas.drawCircle(centerX, y, dp(PER_LETTER_DP) * ACTIVE_BG_RATIO, highlightPaint)
+                    canvas.drawCircle(centerX, y, slotHeight() * ACTIVE_BG_RATIO, highlightPaint)
                 }
-                paint.textSize = if (active) sp(ACTIVE_TEXT_SP) else sp(TEXT_SP)
+                paint.textSize = (if (active) sp(ACTIVE_TEXT_SP) else sp(TEXT_SP)).coerceAtMost(slotHeight() * 0.8f)
                 paint.color = when {
                     active -> ACTIVE_COLOR
                     enabled -> NORMAL_COLOR
@@ -403,10 +451,11 @@ internal class ColorOsAlphabetIndex(
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (letters.isEmpty() || slotHeight() <= 0f) return false
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                    val perLetter = dp(PER_LETTER_DP).toFloat()
-                    val startY = dp(VERTICAL_PADDING_DP).toFloat()
+                    val perLetter = slotHeight()
+                    val startY = verticalPadding()
                     val index = ((event.y - startY) / perLetter).toInt()
                         .coerceIn(0, letters.size - 1)
                     if (index != activeIndex && index in letters.indices) {
@@ -454,6 +503,10 @@ internal class ColorOsAlphabetIndex(
         const val TITLE_CLASS = "com.oplus.smartsidebar.panelview.edgepanel.data.TitleLabelData"
 
         const val APP_LIST_ID = "app_list"
+        /** @author bomo 原厂搜索框资源名；索引布局以其底部为上界，随实际尺寸变化。 */
+        const val SEARCH_VIEW_ID = "search_view"
+        const val SEARCH_GAP_DP = 8
+        const val BOTTOM_MARGIN_DP = 8
         const val BAR_WIDTH_DP = 28
         const val BAR_MARGIN_DP = 2
 
