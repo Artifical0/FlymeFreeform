@@ -16,6 +16,11 @@ internal class SystemServerHookInstaller(
     }
 
     fun install(classLoader: ClassLoader) {
+        // @author bomo 0.2.18 取证：模块扇形（CornerRadialOverlayView → GESTURE_START）就跑在本进程，
+        // 装上触觉埋点才能和 smartsidebar:ui 里的系统侧边栏震动区分开（同一开关控制，默认关闭）。
+        DiagnosticTracer.installHapticTrace(module) { priority, code, throwable ->
+            module.log(priority, TAG, code, throwable)
+        }
         OutsideTapCloseHookInstaller(module, configuration, environment).install(classLoader)
         HandleSwipeUpHookInstaller(module, configuration, environment).install(classLoader)
         try {

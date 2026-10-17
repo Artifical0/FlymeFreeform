@@ -8,6 +8,7 @@ import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.WindowManager
 import io.github.mangi.flymefreeform.config.ToolCatalogCodec
 import java.io.ByteArrayOutputStream
 import java.lang.reflect.InvocationTargetException
@@ -32,9 +33,17 @@ internal class ColorOsToolCatalog(
     private val context: Context,
     private val loader: ClassLoader,
     private val log: (Int, String, Throwable?) -> Unit,
+    /**
+     * @author bomo 面板缩放百分比（来自设置界面滑条，经远端配置下发）；
+     * 仅「最近文件」独立窗口使用，与「全部应用」面板保持同一观感。
+     */
+    private val panelScalePercent: Int = 100,
 ) {
     private var helper: Any? = null
     private var helperClass: Class<*>? = null
+
+    /** @author bomo 当前打开的「最近文件」独立窗口；持引用避免被 GC，关闭时置空。 */
+    private var recentFilesWindow: ColorOsRecentFilesWindow? = null
 
     /** 原厂工具路由与条目类型（按需加载，失败在调用处降级）。 */
     private val pageRoutClass: Class<*> by lazy { loader.loadClass(PAGE_ROUT_CLASS) }
@@ -83,8 +92,9 @@ internal class ColorOsToolCatalog(
      * 小布识屏这类依赖坐标的工具缺了它就会"有时没反应"（截屏不依赖所以一直正常）。
      * 找不到条目时退回 `handle()` 兜底。
      *
-     * **例外**：`recent_files`（最近文件）压根不在执行链上，走 [openRecentFilesPanel]
-     * 由原厂 `userPanelRecentFiles()` 展开面板；失败才继续下面的普通路径。
+     * **例外**：`recent_files`（最近文件）压根不在执行链上，走 [openRecentFilesWindow]
+     * 用模块独立窗口直接承载原厂 `RecentFilePanel`（一步直达，首选）；
+     * 独立窗口不可用时回退 [openRecentFilesPanel] 的旧两步链路；都失败才继续下面的普通路径。
      *
      * @param alias [build] 导出的别名
      * @return 是否成功调用到执行入口
@@ -102,6 +112,13 @@ internal class ColorOsToolCatalog(
         //      在侧边栏内展开 RecentFilePanel。调 startSysTool 只会落到 AbsTool.handle()
         //      的空实现（只打一行日志），表现为"点了没反应"。详见 openRecentFilesPanel。
         if (alias == RECENT_FILES_ALIAS) {
+            // 首选新版：模块自建独立窗口直接承载原厂 RecentFilePanel，
+            // 不再「先展开侧边栏再挂子面板」两步走（B2 方案）。失败自动回退旧链路。
+            if (openRecentFilesWindow(clickX)) {
+                log(Log.INFO, "TOOL_INVOKED $alias via=moduleWindow", null)
+                return true
+            }
+            log(Log.WARN, "RECENT_FILES_WINDOW_UNAVAILABLE", null)
             val opened =
                 runCatching { openRecentFilesPanel() }
                     .onFailure { log(Log.WARN, "RECENT_FILES_PANEL_FAILED", unwrap(it)) }
@@ -139,6 +156,46 @@ internal class ColorOsToolCatalog(
             log(Log.WARN, "TOOL_INVOKE_FAILED $alias", unwrap(exception))
             false
         }
+    }
+
+    /**
+     * @author bomo 用模块自建独立窗口打开「最近文件」（B2 方案，首选路径）。
+     *
+     * 绕开侧边栏状态机：直接单参构造原厂 `RecentFilePanel` 塞进模块自己的 overlay 窗口，
+     * 一步直达、动画自管，消除「先滑出侧边栏再滑出子面板」的两步观感与那段等待。
+     * 任何一步失败都返回 false，由 [run] 回退 [openRecentFilesPanel] 旧链路。
+     *
+     * 呼出方位按点击坐标推导（左半屏靠左、右半屏靠右），与扇形手势方向一致。
+     *
+     * @param clickX 扇形里该工具条目的点击 X 坐标（px）
+     * @return 窗口是否成功显示
+     */
+    private fun openRecentFilesWindow(clickX: Float): Boolean {
+        // 上一个窗口还没关就先收掉，避免叠窗口。
+        recentFilesWindow?.dismiss()
+        recentFilesWindow = null
+        val metrics = runCatching {
+            context.getSystemService(WindowManager::class.java)?.currentWindowMetrics
+        }.getOrNull()
+        val width = metrics?.bounds?.width() ?: 0
+        val leftSide = width > 0 && clickX <= width / 2f
+        val window = ColorOsRecentFilesWindow(context, loader, panelScalePercent, log)
+        val shown = runCatching { window.show(leftSide) }
+            .onFailure { log(Log.WARN, "RECENT_FILES_WINDOW_FAILED", unwrap(it)) }
+            .getOrDefault(false)
+        if (!shown) {
+            runCatching { window.dispose() }
+            return false
+        }
+        recentFilesWindow = window
+        log(Log.INFO, "RECENT_FILES_WINDOW_OPEN left=$leftSide", null)
+        return true
+    }
+
+    /** @author bomo 会话结束/进程清理时收起独立窗口（无窗口时为空操作）。 */
+    fun closeRecentFilesWindow() {
+        recentFilesWindow?.dismiss()
+        recentFilesWindow = null
     }
 
     /**

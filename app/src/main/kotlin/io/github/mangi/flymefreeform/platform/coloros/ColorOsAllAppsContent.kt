@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.os.Build
 import android.os.IInterface
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
@@ -76,6 +77,13 @@ internal class ColorOsAllAppsContent(
     /** 「最近小窗」区块：自绘视图插到原厂 `app_list` 之前，不触碰原厂适配器。 */
     private val recentSection = ColorOsRecentSection(context, loader, log)
     private var recentAttached = false
+
+    /** @author bomo A-Z 字母索引条：覆盖在卡片右缘，滑动跳转列表到对应首字母分组。 */
+    private val alphabetIndex = ColorOsAlphabetIndex(context, loader, log)
+    private var alphabetAttached = false
+    private var alphabetRetries = 0
+    /** 是否已有一次在途的索引条重试任务（防止每帧 preDraw 重复排任务，见 [tryAttachAlphabetIndex]）。 */
+    private var alphabetScheduled = false
     private var closeAction: (() -> Unit)? = null
 
     // ColorOS 16 的这些类仍保留旧版混淆接口；ColorOS 17 已改为独立的 BlurUtil/SidebarPlatformBlurHelper，
@@ -160,6 +168,9 @@ internal class ColorOsAllAppsContent(
         require(FrameLayout::class.java.isAssignableFrom(cardClass))
         require(getRouter.returnType.name == ROUTER_CLASS)
         allClass.getMethod("showAllPanel", Boolean::class.javaPrimitiveType).call(view, leftSide())
+        // @author bomo 注册本面板的 SearchHelper：buildAllList 钩子只改写注册实例的数据列表
+        // （字母分组，Flyme 风格 A-Z 分排），原厂面板不注册、不受影响。
+        ColorOsAlphabetGrouper.register(search)
         tryAttachRecents()
     }
 
@@ -186,6 +197,55 @@ internal class ColorOsAllAppsContent(
             log(Log.WARN, "RECENT_SECTION_NOT_ATTACHED count=${recents.size}", null)
         }
     }
+
+    /**
+     * @author bomo 尝试挂载 A-Z 字母索引条。
+     * 数据异步加载，首帧时可能尚未就绪 → 用 view.postDelayed 轮询，最多 25 次（约 5 秒）。
+     * 需要 card 已创建（attachBlur 阶段）且数据列表非空。
+     *
+     * ⚠️ 本方法由 [attachBlur] 在**每一帧**的 preDraw 里调用。若在每次调用时都无条件
+     * `postDelayed`，N 帧就会排 N 个重试任务，且每个任务再次排布 → 重试任务呈指数增长
+     * （0.2.12/0.2.13 的既有缺陷，表现为首帧附近额外反射与消息风暴）。
+     * 这里用 [alphabetScheduled] 保证同一时刻只有一个待执行的重试任务。
+     */
+    private fun tryAttachAlphabetIndex() {
+        if (alphabetAttached || alphabetRetries >= MAX_ALPHABET_RETRIES) return
+        val surface = card ?: return
+        val dataList = runCatching { getData.call(search) as? List<*> }.getOrNull()
+        if (dataList.isNullOrEmpty()) {
+            alphabetRetries++
+            scheduleAlphabetRetry()
+            return
+        }
+        alphabetAttached = alphabetIndex.attach(surface, view, dataList)
+        if (alphabetAttached && recentAttached &&
+            !recentSection.reserveRightInset(ColorOsAlphabetIndex.RECENT_SECTION_RIGHT_INSET_DP)
+        ) {
+            log(Log.WARN, "RECENT_SECTION_INDEX_INSET_FAILED", null)
+        }
+        if (!alphabetAttached) {
+            alphabetRetries++
+            scheduleAlphabetRetry()
+        }
+    }
+
+    /** 安排一次（且仅一次）在途的索引条重试。 */
+    private fun scheduleAlphabetRetry() {
+        if (alphabetRetries >= MAX_ALPHABET_RETRIES || alphabetScheduled) return
+        alphabetScheduled = true
+        view.postDelayed({
+            alphabetScheduled = false
+            tryAttachAlphabetIndex()
+        }, ALPHABET_POLL_INTERVAL_MS)
+    }
+
+    /**
+     * @author bomo 诊断用：原厂数据列表当前条数。
+     * 列表由 `SearchHelper.loadData()` 异步填充，首帧时可能仍为 0（面板内容区空 → 观感上就是"空白面板"）。
+     * 反射失败按 0 处理（诊断用途，不影响面板功能）。
+     */
+    fun itemCount(): Int =
+        runCatching { (getData.call(search) as? List<*>)?.size ?: 0 }.getOrDefault(0)
 
     fun ready(): Boolean = view.childCount > 0 && getMain.call(handler) != null &&
         (getResident.call(handler) as? IInterface)?.asBinder()?.isBinderAlive == true
@@ -360,6 +420,7 @@ internal class ColorOsAllAppsContent(
     fun attachBlur(): Boolean {
         // @author bomo：首帧时布局已完成，构造期未插上的「最近小窗」区块在这里补插一次。
         tryAttachRecents()
+        tryAttachAlphabetIndex()
         if (colorOs17) {
             attachPlatformGlass()
             return true
@@ -398,15 +459,29 @@ internal class ColorOsAllAppsContent(
     private fun attachPlatformGlass() {
         if (platformGlass || glassTried) return
         glassTried = true
-        val type = glassHelperClass ?: return
-        val apply = glassApply ?: return
-        val surface = card ?: return
+        val type = glassHelperClass ?: run {
+            log(Log.WARN, "PLATFORM_GLASS_FAILED reason=noClass", null)
+            return
+        }
+        val apply = glassApply ?: run {
+            log(Log.WARN, "PLATFORM_GLASS_FAILED reason=noMethod", null)
+            return
+        }
+        val surface = card ?: run {
+            log(Log.WARN, "PLATFORM_GLASS_FAILED reason=noCard", null)
+            return
+        }
         val enabled =
             runCatching {
                 Settings.Global.getInt(context.contentResolver, PLATFORM_GLASS_KEY, 1)
             }.getOrDefault(1)
-        if (enabled == 0) return
-        runCatching {
+        if (enabled == 0) {
+            // @author bomo 明确记录"被开关关掉"，避免与真实失败混淆。
+            log(Log.INFO, "PLATFORM_GLASS_DISABLED", null)
+            return
+        }
+        val started = SystemClock.uptimeMillis()
+        val failure = runCatching {
             val helper = type.getConstructor().newInstance()
             // r(view, asBackground=true, withMaterial=true)：与原生面板一致的附着方式。
             // 17.9.8+ 的 r 尾插一个 Int 参数（默认 0，见 glassApply 注释），按实参个数适配；
@@ -419,11 +494,26 @@ internal class ColorOsAllAppsContent(
             if (applied == true) {
                 glassHelper = helper
                 platformGlass = true
-                log(Log.INFO, "PLATFORM_GLASS_ATTACHED", null)
+                log(
+                    Log.INFO,
+                    "PLATFORM_GLASS_ATTACHED ms=${SystemClock.uptimeMillis() - started}",
+                    null,
+                )
                 // 模糊 Drawable 即视图背景，卡片底色必须透明，否则挡住玻璃。
                 cardClass.getMethod("setCardBackgroundColor", Int::class.javaPrimitiveType).call(surface, 0)
                 surface.elevation = 0f
+            } else {
+                // @author bomo 附着被拒（典型成因：窗口 SurfaceControl 首帧尚未就绪）。
+                // 此时卡片会保留不透明底色 #BFEEEEEE（浅灰白）→ 面板观感偏白、玻璃缺失。
+                log(Log.WARN, "PLATFORM_GLASS_FAILED reason=rejected", null)
             }
+        }.exceptionOrNull()
+        if (failure != null) {
+            log(
+                Log.WARN,
+                "PLATFORM_GLASS_FAILED reason=throw ${failure.javaClass.simpleName}",
+                failure,
+            )
         }
     }
 
@@ -491,6 +581,9 @@ internal class ColorOsAllAppsContent(
     fun close() {
         if (closed) return
         closed = true
+        ColorOsAlphabetGrouper.unregister(search)
+        alphabetIndex.detach()
+        alphabetAttached = false
         try {
             // ColorOS 17 已移除旧的搜索动画访问器；关闭时只需停止数据加载即可。
         } finally {
@@ -587,5 +680,11 @@ internal class ColorOsAllAppsContent(
 
         /** 覆盖键：`adb shell settings put global flymefreeform_surface_alpha 230` */
         const val SURFACE_ALPHA_KEY = "flymefreeform_surface_alpha"
+
+        /** @author bomo 字母索引条数据轮询间隔。 */
+        const val ALPHABET_POLL_INTERVAL_MS = 200L
+
+        /** @author bomo 字母索引条最大轮询次数（25 × 200ms ≈ 5 秒）。 */
+        const val MAX_ALPHABET_RETRIES = 25
     }
 }

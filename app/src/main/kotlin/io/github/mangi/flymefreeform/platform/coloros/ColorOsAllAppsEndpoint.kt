@@ -40,7 +40,10 @@ internal class ColorOsAllAppsEndpoint(
     }
     private val messenger = Messenger(Handler(Looper.getMainLooper(), ::receive))
     /** 工具目录与执行器；只在侧边栏进程可用（工具是侧边栏内部的 AbsTool 处理器）。 */
-    private val toolCatalog by lazy { ColorOsToolCatalog(service, loader, log) }
+    /** @author bomo 「最近文件」独立窗口复用「全部应用」的缩放设置，两面板观感一致。 */
+    private val toolCatalog by lazy {
+        ColorOsToolCatalog(service, loader, log, configuration.snapshot.panelScalePercent)
+    }
     private var toolCatalogPublished = false
     /** [encodedToolCatalog] 的缓存；目录可能随侧边栏版本更新变化，进程内视为不变。 */
     private var encodedToolCatalogCache: String? = null
@@ -405,6 +408,11 @@ internal class ColorOsAllAppsEndpoint(
 
     private fun finish(current: Request, result: Int) {
         if (request !== current) return
+        // @author bomo 「最近文件」独立窗口与面板会话互斥：会话收尾时顺手收起，
+        // 避免两个 overlay 叠屏（该窗口本身也有 120 秒无操作自动收起）。
+        if (current.phase == Phase.Active || current.exitStarted) {
+            toolCatalog.closeRecentFilesWindow()
+        }
         request = null
         current.action.cancel()
         current.pendingTool = null
