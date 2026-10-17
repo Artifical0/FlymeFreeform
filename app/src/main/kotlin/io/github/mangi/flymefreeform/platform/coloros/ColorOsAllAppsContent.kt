@@ -195,6 +195,8 @@ internal class ColorOsAllAppsContent(
             }
         if (!recentAttached) {
             log(Log.WARN, "RECENT_SECTION_NOT_ATTACHED count=${recents.size}", null)
+        } else {
+            reserveRecentIndexInset()
         }
     }
 
@@ -217,15 +219,22 @@ internal class ColorOsAllAppsContent(
             scheduleAlphabetRetry()
             return
         }
-        alphabetAttached = alphabetIndex.attach(surface, view, dataList)
-        if (alphabetAttached && recentAttached &&
-            !recentSection.reserveRightInset(ColorOsAlphabetIndex.RECENT_SECTION_RIGHT_INSET_DP)
-        ) {
-            log(Log.WARN, "RECENT_SECTION_INDEX_INSET_FAILED", null)
-        }
+        alphabetAttached = alphabetIndex.attach(surface, view, dataList, leftSide())
+        reserveRecentIndexInset()
         if (!alphabetAttached) {
             alphabetRetries++
             scheduleAlphabetRetry()
+        }
+    }
+
+    /** @author bomo 索引与最近小窗都就绪后按呼出方向避让；无返回值，布局参数不兼容时记录诊断。 */
+    private fun reserveRecentIndexInset() {
+        if (!alphabetAttached || !recentAttached) return
+        val left = leftSide()
+        val inset = if (left) ColorOsAlphabetIndex.RIGHT_CONTENT_INSET_DP
+            else ColorOsAlphabetIndex.RECENT_SECTION_RIGHT_INSET_DP
+        if (!recentSection.reserveIndexInset(inset, left)) {
+            log(Log.WARN, "RECENT_SECTION_INDEX_INSET_FAILED", null)
         }
     }
 

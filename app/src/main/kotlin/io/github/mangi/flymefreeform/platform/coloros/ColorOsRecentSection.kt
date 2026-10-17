@@ -38,6 +38,7 @@ internal class ColorOsRecentSection(
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
     private var nativeTitleColor: Int? = null
     private var recentScrollView: HorizontalScrollView? = null
+    private var recentRoot: View? = null
 
     /**
      * 把区块插入面板容器。
@@ -82,6 +83,7 @@ internal class ColorOsRecentSection(
                 ),
             )
             recentScrollView = built.scrollView
+            recentRoot = built.root
             // @author bomo 标题样式必须与原厂区块标题（「工具」/「应用」）一致（用户 2026-09-22 要求）。
             syncHeaderStyleLater(built.header, panelView)
             log(Log.INFO, "RECENT_SECTION_ATTACHED count=${resolved.size}", null)
@@ -107,14 +109,21 @@ internal class ColorOsRecentSection(
 
     /**
      * @author bomo 为最近小窗横向列表预留右侧索引条区域，避免图标和字母索引重叠。
+     * @author bomo 0.2.23 支持左右索引；左侧让标题和整行一起避让，右侧保留原有横向列表留白。
      * @param insetDp 预留宽度（dp）；小于或等于 0 时清除预留。
+     * @param leftSide 为 true 时预留物理左侧，否则预留物理右侧。
      * @return 已挂载列表的布局参数更新成功时为 true；未挂载或参数类型不符时为 false，负数按 0 处理。
      * @throws RuntimeException 如果 Android 拒绝更新视图布局参数，则异常交由调用方处理。
      */
-    fun reserveRightInset(insetDp: Int): Boolean {
+    fun reserveIndexInset(insetDp: Int, leftSide: Boolean): Boolean {
         val scrollView = recentScrollView ?: return false
+        val root = recentRoot ?: return false
         val params = scrollView.layoutParams as? LinearLayout.LayoutParams ?: return false
-        params.rightMargin = dp(insetDp.coerceAtLeast(0))
+        val rootParams = root.layoutParams as? LinearLayout.LayoutParams ?: return false
+        val inset = dp(insetDp.coerceAtLeast(0))
+        rootParams.leftMargin = if (leftSide) inset else 0
+        params.rightMargin = if (leftSide) 0 else inset
+        root.layoutParams = rootParams
         scrollView.layoutParams = params
         return true
     }

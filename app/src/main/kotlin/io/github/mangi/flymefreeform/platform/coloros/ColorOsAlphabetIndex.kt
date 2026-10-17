@@ -20,6 +20,7 @@ import java.lang.reflect.Method
 
 /**
  * 「全部」面板右侧的 A-Z 字母索引条。
+ * @author bomo 0.2.23：按实际呼出侧镜像布局；以下右缘/左侧气泡说明为右侧呼出的默认路径，左侧呼出时相反。
  *
  * 交互对齐 Flyme 原生实现：细条贴右缘、常驻完整 A-Z + '#'（无应用的字母置灰、
  * 触摸仍浮出气泡但不跳转），滑动时列表即时跳到对应字母分组开头，
@@ -85,6 +86,8 @@ internal class ColorOsAlphabetIndex(
     private var popup: TextView? = null
     private var recyclerView: View? = null
     private var attached = false
+    private var leftSide = false
+    private var originalListPadding: Rect? = null
     private var hostCard: FrameLayout? = null
     private var searchAnchor: View? = null
     private val placementListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updatePlacement() }
@@ -98,9 +101,10 @@ internal class ColorOsAlphabetIndex(
      * @param card 模块自建面板卡片（FrameLayout）
      * @param panelView 原厂 AllAppPanelView 根视图
      * @param dataList 当前数据列表（来自 SearchHelper.getCurrentDataList()）
+     * @param leftSide 实际从左下角呼出时为 true；使用物理左右，不随文字排版方向翻转。
      * @return 是否成功挂载
      */
-    fun attach(card: FrameLayout, panelView: ViewGroup, dataList: List<*>): Boolean {
+    fun attach(card: FrameLayout, panelView: ViewGroup, dataList: List<*>, leftSide: Boolean): Boolean {
         if (attached) return true
         val recycler = findRecyclerView(panelView) ?: run {
             log(Log.WARN, "ALPHABET_INDEX_NO_RECYCLER", null)
@@ -111,6 +115,13 @@ internal class ColorOsAlphabetIndex(
         if (letterMap.size < 2) {
             log(Log.INFO, "ALPHABET_INDEX_TOO_FEW letters=${letterMap.size}", null)
             return false
+        }
+        this.leftSide = leftSide
+        if (leftSide) {
+            // @author bomo 左缘原本紧邻标题和第一列；用内容留白避让，保留原厂相对marginStart及其他布局参数。
+            originalListPadding = Rect(recycler.paddingLeft, recycler.paddingTop, recycler.paddingRight, recycler.paddingBottom)
+            recycler.setPadding(recycler.paddingLeft + dp(RIGHT_CONTENT_INSET_DP),
+                recycler.paddingTop, recycler.paddingRight, recycler.paddingBottom)
         }
         val barView = AlphabetIndexBar(context).apply {
             // Flyme 风格：常驻完整字母表，无应用的字母置灰。
@@ -124,8 +135,9 @@ internal class ColorOsAlphabetIndex(
             this.onTouchEnd = { popup?.visibility = View.GONE }
         }
         val params = FrameLayout.LayoutParams(dp(BAR_WIDTH_DP), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            gravity = Gravity.END or Gravity.TOP
-            rightMargin = dp(BAR_MARGIN_DP)
+            gravity = (if (leftSide) Gravity.LEFT else Gravity.RIGHT) or Gravity.TOP
+            leftMargin = if (leftSide) dp(BAR_MARGIN_DP) else 0
+            rightMargin = if (leftSide) 0 else dp(BAR_MARGIN_DP)
         }
         barView.visibility = View.INVISIBLE
         card.addView(barView, params)
@@ -148,14 +160,14 @@ internal class ColorOsAlphabetIndex(
             }
             val size = dp(POPUP_SIZE_DP)
             val popupParams = FrameLayout.LayoutParams(size, size).apply {
-                gravity = Gravity.END or Gravity.TOP
+                gravity = Gravity.LEFT or Gravity.TOP
             }
             card.addView(this, popupParams)
         }
         popup = popupView
         attached = true
         updatePlacement()
-        log(Log.INFO, "ALPHABET_INDEX_ATTACHED letters=${letterMap.size}", null)
+        log(Log.INFO, "ALPHABET_INDEX_ATTACHED letters=${letterMap.size} side=${if (leftSide) "left" else "right"}", null)
         return true
     }
 
@@ -167,6 +179,11 @@ internal class ColorOsAlphabetIndex(
         popup?.let { (it.parent as? ViewGroup)?.removeView(it) }
         bar = null
         popup = null
+        // @author bomo 注销/重新挂载时归还原厂内边距，防止反复挂载叠加左侧留白。
+        originalListPadding?.let { original ->
+            recyclerView?.setPadding(original.left, original.top, original.right, original.bottom)
+        }
+        originalListPadding = null
         recyclerView = null
         attached = false
         hostCard = null
@@ -372,7 +389,11 @@ internal class ColorOsAlphabetIndex(
         val params = popup.layoutParams as FrameLayout.LayoutParams
         val cardY = barView.top + slotCenterY
         params.topMargin = (cardY - size / 2).toInt().coerceIn(0, (card.height - size).coerceAtLeast(0))
-        params.rightMargin = dp(RIGHT_CONTENT_INSET_DP)
+        // @author bomo 气泡永远朝卡片内侧浮出，按索引真实位置计算，短卡片也不越界。
+        params.leftMargin = (if (leftSide) barView.right + dp(POPUP_GAP_DP)
+            else barView.left - size - dp(POPUP_GAP_DP))
+            .coerceIn(0, (card.width - size).coerceAtLeast(0))
+        params.rightMargin = 0
         popup.layoutParams = params
     }
 
