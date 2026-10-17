@@ -9,6 +9,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.util.TypedValue
+import android.view.HapticFeedbackConstants
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -460,6 +461,8 @@ internal class ColorOsAlphabetIndex(
                         .coerceIn(0, letters.size - 1)
                     if (index != activeIndex && index in letters.indices) {
                         activeIndex = index
+                        // @author bomo 每次进入新字母轻震一次；遵循系统触感设置，同槽移动和抬手不重复震动。
+                        performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                         invalidate()
                         onLetterTouch?.invoke(letters[index], slotCenter(index))
                     }
