@@ -7,6 +7,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.WindowManager
 import io.github.mangi.flymefreeform.config.ToolCatalogCodec
@@ -100,6 +101,7 @@ internal class ColorOsToolCatalog(
      * @return 是否成功调用到执行入口
      */
     fun run(alias: String, clickX: Float, clickY: Float): Boolean {
+        val dispatchAt = SystemClock.uptimeMillis()
         val instance = ensureHelper() ?: return false
         // 0) PageRout 坐标记账：识屏等工具依赖点击坐标，扇形触发时传手势位置。
         try {
@@ -137,7 +139,7 @@ internal class ColorOsToolCatalog(
                 pageRoutClass
                     .getMethod(PAGE_ROUT_METHOD, entryBeanClass)
                     .invoke(null, bean)
-                log(Log.INFO, "TOOL_INVOKED $alias via=${PAGE_ROUT_METHOD}", null)
+                log(Log.INFO, "TOOL_INVOKED $alias via=${PAGE_ROUT_METHOD} dispatchMs=${SystemClock.uptimeMillis() - dispatchAt}", null)
                 return true
             } catch (exception: Exception) {
                 log(Log.WARN, "TOOL_PAGE_ROUT_FAILED $alias", unwrap(exception))

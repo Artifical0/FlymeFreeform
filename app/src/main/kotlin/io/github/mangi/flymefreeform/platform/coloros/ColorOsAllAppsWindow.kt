@@ -122,6 +122,9 @@ internal class ColorOsAllAppsWindow(
     private val backCallback = OnBackInvokedCallback { back() }
     private val animation = Runnable { animateFrame() }
     private val timeout = Runnable { dismiss() }
+    /** @author bomo 透明帧未提交时仅清理，不让取屏工具截到模块内容。 */
+    private val hiddenFrameTimeout = Runnable { dispose() }
+    private var toolSelectedAt = 0L
     private val firstFrame = ViewTreeObserver.OnPreDrawListener { prepareFirstFrame() }
     private var waitingForFirstFrame = true
     private val root = object : FrameLayout(context) {
@@ -297,6 +300,7 @@ internal class ColorOsAllAppsWindow(
     fun beginItemClick(afterHidden: (() -> Unit)? = null): Boolean {
         if (!isShown()) return false
         hiddenAction = afterHidden
+        if (afterHidden != null) toolSelectedAt = SystemClock.uptimeMillis()
         dismiss()
         return true
     }
@@ -312,7 +316,8 @@ internal class ColorOsAllAppsWindow(
             return
         }
         context.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(root.windowToken, 0)
-        startAnimation()
+        // @author bomo 工具交接直接提交不可见帧；普通关闭仍保留原退场动画。
+        if (hiddenAction != null) finishExit() else startAnimation()
     }
 
     fun dispose() {
@@ -322,6 +327,7 @@ internal class ColorOsAllAppsWindow(
         hiddenAction = null
         root.removeCallbacks(animation)
         root.removeCallbacks(timeout)
+        root.removeCallbacks(hiddenFrameTimeout)
         try {
             content.close()
         } catch (exception: Exception) {
@@ -502,17 +508,27 @@ internal class ColorOsAllAppsWindow(
             return
         }
         // 先提交不可见帧，再执行原厂工具；短暂保留窗口所有权供系统判断前台发起者。
-        root.postOnAnimation {
+        root.postDelayed(hiddenFrameTimeout, SidebarProtocol.CLEANUP_TIMEOUT_MS)
+        val dispatch = Runnable {
             safely {
+                root.removeCallbacks(hiddenFrameTimeout)
                 if (closed) return@safely
                 beforeTool {
                     safely {
                         if (closed) return@safely
+                        log(Log.INFO, "TOOL_PANEL_HIDDEN ms=${SystemClock.uptimeMillis() - toolSelectedAt}", null)
                         action()
                         root.postOnAnimation { if (!closed) dispose() }
                     }
                 }
             }
+        }
+        // @author bomo postOnAnimation 发生于绘制前；硬件渲染必须确认提交后才调用工具。
+        if (root.isHardwareAccelerated) {
+            root.viewTreeObserver.registerFrameCommitCallback { root.post(dispatch) }
+            root.invalidate()
+        } else {
+            root.postOnAnimation { root.postOnAnimation(dispatch) }
         }
     }
 
