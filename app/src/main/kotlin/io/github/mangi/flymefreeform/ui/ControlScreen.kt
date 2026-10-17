@@ -91,6 +91,8 @@ internal fun ControlScreen(
     onModuleEnabledChange: (Boolean) -> Unit,
     onLeftCornerEnabledChange: (Boolean) -> Unit,
     onRightCornerEnabledChange: (Boolean) -> Unit,
+    /** @author bomo 设置系统原生侧边栏入口的可见/可触发状态。 */
+    onHideNativeSidebarChange: (Boolean) -> Unit,
     onCornerTriggerRangeChange: (Int) -> Unit,
     /** @author bomo 触发热区形状（扇形 / 三角形）变更。 */
     onTriggerShapeChange: (TriggerShape) -> Unit,
@@ -173,6 +175,7 @@ internal fun ControlScreen(
                             onModuleEnabledChange,
                             onLeftCornerEnabledChange,
                             onRightCornerEnabledChange,
+                            onHideNativeSidebarChange = onHideNativeSidebarChange,
                             onCornerTriggerRangeChange,
                             onTriggerShapeChange = onTriggerShapeChange,
                             onTriggerHorizontalDpChange = onTriggerHorizontalDpChange,
@@ -335,6 +338,8 @@ private fun SettingsCard(
     onModuleEnabledChange: (Boolean) -> Unit,
     onLeftCornerEnabledChange: (Boolean) -> Unit,
     onRightCornerEnabledChange: (Boolean) -> Unit,
+    /** @author bomo 设置系统原生侧边栏入口的可见/可触发状态。 */
+    onHideNativeSidebarChange: (Boolean) -> Unit,
     onCornerTriggerRangeChange: (Int) -> Unit,
     /** @author bomo 触发热区形状变更。 */
     onTriggerShapeChange: (TriggerShape) -> Unit,
@@ -363,6 +368,14 @@ private fun SettingsCard(
             else -> stringResource(R.string.radial_apps_count_summary, state.settings.pinnedComponents.size)
         }
     Card(modifier = Modifier.fillMaxWidth()) {
+        SwitchPreference(
+            checked = state.settings.hideNativeSidebar,
+            onCheckedChange = onHideNativeSidebarChange,
+            title = stringResource(R.string.hide_native_sidebar_title),
+            summary = stringResource(R.string.hide_native_sidebar_summary),
+            enabled = state.canChangeSettings,
+            startAction = { PreferenceIcon(Icons.Rounded.SwipeLeft, state.canChangeSettings) },
+        )
         SwitchPreference(
             checked = state.settings.enabled,
             onCheckedChange = onModuleEnabledChange,

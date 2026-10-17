@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
                     onModuleEnabledChange = repository::setModuleEnabled,
                     onLeftCornerEnabledChange = repository::setLeftCornerEnabled,
                     onRightCornerEnabledChange = repository::setRightCornerEnabled,
+                    onHideNativeSidebarChange = repository::setHideNativeSidebar,
                     onCornerTriggerRangeChange = repository::setCornerTriggerRangeDp,
                     onTriggerShapeChange = repository::setTriggerShape,
                     onTriggerHorizontalDpChange = repository::setTriggerHorizontalDp,

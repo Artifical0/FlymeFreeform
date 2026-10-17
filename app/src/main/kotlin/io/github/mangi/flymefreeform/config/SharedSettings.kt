@@ -18,6 +18,8 @@ import android.provider.Settings
  * @author bomo
  */
 internal object SharedSettings {
+    /** @author bomo 系统服务启动时把正式配置同步到此键，原生入口在重启后按新选项恢复/隐藏。 */
+    const val KEY_HIDE_NATIVE_BAR = "flymefreeform_hide_native_bar"
     const val KEY_TOOL_CATALOG = "flymefreeform_tool_catalog_v1"
     const val KEY_RECENT_FREEFORM = "flymefreeform_recent_freeform_v1"
 

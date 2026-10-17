@@ -60,6 +60,10 @@ internal class FrameworkConnectionRepository(
     fun setModuleEnabled(enabled: Boolean) =
         updateSettings { it.copy(enabled = enabled) }
 
+    /** @author bomo 保存原生侧边栏入口隐藏选项，沿用配置落盘与热推送通道。 */
+    fun setHideNativeSidebar(hidden: Boolean) =
+        updateSettings { it.copy(hideNativeSidebar = hidden) }
+
     fun setLeftCornerEnabled(enabled: Boolean) =
         updateSettings { it.copy(leftCornerEnabled = enabled) }
 

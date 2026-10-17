@@ -91,4 +91,7 @@
     <string name="pause_in_landscape_summary">横屏时暂停模块增强，恢复竖屏后自动启用</string>
     <string name="pause_in_game_mode_title">游戏模式时暂停</string>
     <string name="pause_in_game_mode_summary">系统进入游戏模式时暂停模块增强，退出后自动启用</string>
+    <!-- @author bomo 原生侧边栏入口开关；不关闭系统服务和工具。 -->
+    <string name="hide_native_sidebar_title">隐藏系统侧边栏</string>
+    <string name="hide_native_sidebar_summary">隐藏系统浮标并停用其边缘滑动入口，保留 Flyme 小窗和系统工具；修改后重启手机生效</string>
 </resources>
