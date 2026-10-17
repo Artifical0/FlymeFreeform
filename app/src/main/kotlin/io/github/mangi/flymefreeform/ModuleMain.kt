@@ -5,6 +5,7 @@ import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.mangi.flymefreeform.hook.LauncherHookInstaller
+import io.github.mangi.flymefreeform.hook.NativeSidebarHookInstaller
 import io.github.mangi.flymefreeform.hook.ProcessConfiguration
 import io.github.mangi.flymefreeform.hook.SidebarHookInstaller
 import io.github.mangi.flymefreeform.platform.coloros.ColorOsSidebarTarget
@@ -68,6 +69,12 @@ class ModuleMain : XposedModule() {
         val settings = configuration ?: return
         if (hooksInstalled) return
         when {
+            // @author bomo 原生浮标/区域监听在 :edgepanel；该进程只装原生输入拦截，不安装 UI 面板桥接。
+            processName == ColorOsSidebarTarget.NATIVE_PROCESS_NAME && param.packageName == ColorOsSidebarTarget.PACKAGE_NAME -> {
+                hooksInstalled = true
+                NativeSidebarHookInstaller(this).install(param.classLoader)
+            }
+
             processName == ColorOsSidebarTarget.PROCESS_NAME && param.packageName == ColorOsSidebarTarget.PACKAGE_NAME -> {
                 hooksInstalled = true
                 SidebarHookInstaller(this, settings).install(param.classLoader)
@@ -94,6 +101,7 @@ class ModuleMain : XposedModule() {
         param.isSystemServer ||
             param.processName == PROCESS_SYSTEM_UI ||
             param.processName == PROCESS_LAUNCHER ||
+            param.processName == ColorOsSidebarTarget.NATIVE_PROCESS_NAME ||
             param.processName == ColorOsSidebarTarget.PROCESS_NAME
 
     private fun disableForConfigurationFailure(code: String, exception: RuntimeException) {

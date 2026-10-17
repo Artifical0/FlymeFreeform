@@ -153,8 +153,10 @@ internal class CornerRadialOverlayView(
         setViewTreeSavedStateRegistryOwner(this)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         isFocusableInTouchMode = true
+        // @author bomo 以下为 0.2.19 对需求的误解记录，保留追溯：
         // @author bomo 按使用者要求关闭本扇形的触觉反馈，统一覆盖开启与图标划选两条调用路径。
-        isHapticFeedbackEnabled = false
+        // @author bomo 0.2.20 更正：应关闭系统侧边栏入口，保留本扇形的开启与划选震动。
+        isHapticFeedbackEnabled = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
 

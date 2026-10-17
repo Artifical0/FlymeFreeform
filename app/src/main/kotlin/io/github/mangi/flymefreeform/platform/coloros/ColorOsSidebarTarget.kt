@@ -21,6 +21,8 @@ import android.os.Build
 internal object ColorOsSidebarTarget {
     const val PACKAGE_NAME = "com.coloros.smartsidebar"
     const val PROCESS_NAME = "$PACKAGE_NAME:ui"
+    /** @author bomo 原生浮标及滑动区域监听所属进程；与面板 UI 进程分开安装钩子。 */
+    const val NATIVE_PROCESS_NAME = "$PACKAGE_NAME:edgepanel"
     const val SERVICE_CLASS = "com.oplus.smartsidebar.panelview.edgepanel.UIService"
     const val BIND_ACTION = "io.github.mangi.flymefreeform.action.BIND_ALL_APPS_V1"
     const val REQUIRED_PERMISSION = "oppo.permission.OPPO_COMPONENT_SAFE"
