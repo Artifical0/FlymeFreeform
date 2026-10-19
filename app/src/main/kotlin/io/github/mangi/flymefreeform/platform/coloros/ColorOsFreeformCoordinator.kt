@@ -11,6 +11,7 @@ import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import android.view.Display
 import android.view.Gravity
@@ -134,6 +135,8 @@ internal class ColorOsFreeformCoordinator(
 
     fun start() {
         handler.post {
+            // @author bomo 仅系统服务启动时同步隐藏选项，避免旧窗口参数与实时区域出现半切换状态。
+            syncNativeSidebarSetting(configuration.snapshot.hideNativeSidebar)
             recentFreeformEntries.addAll(configuration.readRecentFreeform())
             registerToolRequestReceiver()
             registerConfigPushReceiver()
@@ -187,6 +190,21 @@ internal class ColorOsFreeformCoordinator(
             activeGestureConfig = null
             gestureEngine.cancel()
             removeOverlay()
+        }
+    }
+
+    /** @author bomo 在唯一有写权限的系统服务启动时同步入口开关；改动于下次重启生效，失败留诊断。 */
+    private fun syncNativeSidebarSetting(hidden: Boolean) {
+        try {
+            val value = if (hidden) 1 else 0
+            if (Settings.Global.getInt(context.contentResolver, SharedSettings.KEY_HIDE_NATIVE_BAR, -1) == value) return
+            if (Settings.Global.putInt(context.contentResolver, SharedSettings.KEY_HIDE_NATIVE_BAR, value)) {
+                logger(Log.INFO, "NATIVE_SIDEBAR_SETTING hidden=$hidden", null)
+            } else {
+                logger(Log.WARN, "NATIVE_SIDEBAR_SETTING_WRITE_FAILED", null)
+            }
+        } catch (exception: RuntimeException) {
+            logger(Log.WARN, "NATIVE_SIDEBAR_SETTING_WRITE_FAILED", exception)
         }
     }
 

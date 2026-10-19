@@ -37,6 +37,8 @@ internal class ColorOsRecentSection(
 ) {
     private val launcherApps = context.getSystemService(LauncherApps::class.java)
     private var nativeTitleColor: Int? = null
+    private var recentScrollView: HorizontalScrollView? = null
+    private var recentRoot: View? = null
 
     /**
      * 把区块插入面板容器。
@@ -80,6 +82,8 @@ internal class ColorOsRecentSection(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                 ),
             )
+            recentScrollView = built.scrollView
+            recentRoot = built.root
             // @author bomo 标题样式必须与原厂区块标题（「工具」/「应用」）一致（用户 2026-09-22 要求）。
             syncHeaderStyleLater(built.header, panelView)
             log(Log.INFO, "RECENT_SECTION_ATTACHED count=${resolved.size}", null)
@@ -100,7 +104,70 @@ internal class ColorOsRecentSection(
     private data class BuiltStrip(
         val root: View,
         val header: TextView,
+        val scrollView: HorizontalScrollView,
     )
+
+    /**
+     * @author bomo 为最近小窗横向图标行预留索引条区域，避免图标和字母索引重叠。
+     * @author bomo 0.2.23 支持左右索引；左侧让标题和整行一起避让，右侧保留原有横向列表留白。（首版行为说明；现已统一为左右镜像。）
+     * @author bomo 让标题和图标行在索引侧共用右侧布局的内容边缘距离。
+     * @param insetDp 横向列表在索引一侧的基础外边距（dp）；小于或等于 0 时清除该额外外边距。
+     * @param leftSide 为 true 时预留物理左侧，否则预留物理右侧。
+     * @param card 模块面板卡片，用于按卡片屏幕边缘计算左右一致的实际内容间距。
+     * @return 已挂载列表的布局参数更新成功时为 true；未挂载或参数类型不符时为 false，负数按 0 处理。
+     * @throws RuntimeException 如果 Android 拒绝更新视图布局参数，则异常交由调用方处理。
+     */
+    fun reserveIndexInset(insetDp: Int, leftSide: Boolean, card: View): Boolean {
+        val scrollView = recentScrollView ?: return false
+        val root = recentRoot ?: return false
+        val params = scrollView.layoutParams as? LinearLayout.LayoutParams ?: return false
+        val rootParams = root.layoutParams as? LinearLayout.LayoutParams ?: return false
+        val container = root.parent as? ViewGroup ?: return false
+        val row = scrollView.getChildAt(0) ?: return false
+        if (card.width <= 0 || container.width <= 0) return false
+        val cardLocation = IntArray(2)
+        val containerLocation = IntArray(2)
+        card.getLocationOnScreen(cardLocation)
+        container.getLocationOnScreen(containerLocation)
+        val edgeInset = dp(insetDp.coerceAtLeast(0)) + dp(ROW_CONTENT_HORIZONTAL_PADDING_DP)
+        val cardLeft = cardLocation[0]
+        val cardRight = cardLeft + card.width
+        val containerLeft = containerLocation[0] + container.paddingLeft
+        val containerRight = containerLocation[0] + container.width - container.paddingRight
+        // @author bomo 右侧索引贴近列表行末；用镜像排列保持索引侧最近应用完整可见。
+        if (!leftSide) {
+            row.layoutDirection = View.LAYOUT_DIRECTION_RTL
+            scrollView.layoutDirection = View.LAYOUT_DIRECTION_RTL
+            // @author bomo 右侧索引贴近首个最近应用；RTL排列并滚到右端，避免最近项被视口裁掉。
+            scrollView.post { scrollView.fullScroll(View.FOCUS_RIGHT) }
+        }
+        val rootLeftInset = if (leftSide) {
+            (cardLeft + edgeInset - containerLeft - dp(HEADER_CONTENT_HORIZONTAL_PADDING_DP)).coerceAtLeast(0)
+        } else {
+            0
+        }
+        val rowEdgePadding = if (leftSide) row.paddingLeft else row.paddingRight
+        val rowSideInset = if (leftSide) {
+            (cardLeft + edgeInset - containerLeft - rootLeftInset - rowEdgePadding)
+                .coerceAtLeast(0)
+        } else {
+            (containerRight - (cardRight - edgeInset) - rowEdgePadding).coerceAtLeast(0)
+        }
+        rootParams.leftMargin = rootLeftInset
+        params.leftMargin = if (leftSide) {
+            rowSideInset
+        } else {
+            0
+        }
+        params.rightMargin = if (leftSide) 0 else rowSideInset
+        root.layoutParams = rootParams
+        scrollView.layoutParams = params
+        log(Log.INFO,
+            "RECENT_SECTION_INDEX_INSET side=${if (leftSide) "left" else "right"} edge=$edgeInset rootLeft=$rootLeftInset rowSide=$rowSideInset cardWidth=${card.width} containerWidth=${container.width}",
+            null,
+        )
+        return true
+    }
 
     private fun resolve(component: ComponentName): RecentItem? =
         try {
@@ -133,14 +200,16 @@ internal class ColorOsRecentSection(
                 // 兜底字号：挂载后会被 syncHeaderStyleLater 换成原厂区块标题的真实样式。
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, HEADER_TEXT_SP)
                 setTextColor(textColor)
-                setPadding(dp(16f), dp(2f), dp(16f), dp(2f))
+                setPadding(dp(HEADER_CONTENT_HORIZONTAL_PADDING_DP), dp(2f),
+                    dp(HEADER_CONTENT_HORIZONTAL_PADDING_DP), dp(2f))
                 includeFontPadding = false
             }
         column.addView(header)
         val row =
             LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
-                setPadding(dp(10f), 0, dp(10f), 0)
+                setPadding(dp(ROW_CONTENT_HORIZONTAL_PADDING_DP), 0,
+                    dp(ROW_CONTENT_HORIZONTAL_PADDING_DP), 0)
             }
         items.forEach { item ->
             row.addView(
@@ -151,7 +220,7 @@ internal class ColorOsRecentSection(
                 },
             )
         }
-        column.addView(
+        val scrollView =
             HorizontalScrollView(context).apply {
                 isHorizontalScrollBarEnabled = false
                 overScrollMode = View.OVER_SCROLL_NEVER
@@ -162,13 +231,15 @@ internal class ColorOsRecentSection(
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                     ),
                 )
-            },
+            }
+        column.addView(
+            scrollView,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ),
         )
-        return BuiltStrip(column, header)
+        return BuiltStrip(column, header, scrollView)
     }
 
     /**
@@ -340,6 +411,12 @@ internal class ColorOsRecentSection(
         const val LABEL_TEXT_SP = 11f
         const val ICON_SIZE_DP = 46
         const val ITEM_WIDTH_DP = 62
+
+        /** @author bomo 最近小窗标题中文字距标题容器左边缘的固定内边距。 */
+        const val HEADER_CONTENT_HORIZONTAL_PADDING_DP = 16
+
+        /** @author bomo 最近小窗图标行内容距横向列表左右边缘的固定内边距。 */
+        const val ROW_CONTENT_HORIZONTAL_PADDING_DP = 10
 
         /** 主题属性解析失败时的兜底文字色。 */
         const val DEFAULT_TEXT_COLOR = 0xFF000000.toInt()

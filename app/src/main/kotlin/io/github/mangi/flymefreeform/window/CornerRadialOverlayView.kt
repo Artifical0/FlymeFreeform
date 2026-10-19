@@ -6,6 +6,8 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.res.Configuration
 import android.os.SystemClock
+import android.util.Log
+import io.github.mangi.flymefreeform.config.ModulePreferences
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.RoundedCorner
@@ -153,6 +155,10 @@ internal class CornerRadialOverlayView(
         setViewTreeSavedStateRegistryOwner(this)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         isFocusableInTouchMode = true
+        // @author bomo 以下为 0.2.19 对需求的误解记录，保留追溯：
+        // @author bomo 按使用者要求关闭本扇形的触觉反馈，统一覆盖开启与图标划选两条调用路径。
+        // @author bomo 0.2.20 更正：应关闭系统侧边栏入口，保留本扇形的开启与划选震动。
+        isHapticFeedbackEnabled = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
 
@@ -936,6 +942,21 @@ internal class CornerRadialOverlayView(
         if (dismissing || disposed) return
         dismissing = true
         removeCallbacks(timeout)
+        // @author bomo 取屏类工具不能截到扇形，但无需先等完200ms装饰动画；实际透明帧提交后才交接。
+        if (pendingCommit != null && ModulePreferences.isToolComponent(pendingCommit.component)) {
+            val selectedAt = SystemClock.uptimeMillis()
+            alpha = 0f
+            postDelayed(timeout, 2_000L) // 渲染失联只关闭，不以超时冒充已提交、更不执行迟到工具。
+            hideBackdropAfterFrame {
+                if (!disposed && !dismissNotified) {
+                    removeCallbacks(timeout)
+                    dismissNotified = true
+                    Log.i("FlymeFreeformTool", "TOOL_RADIAL_HIDDEN ms=${SystemClock.uptimeMillis() - selectedAt}")
+                    listener.onAppCommitted(pendingCommit)
+                }
+            }
+            return
+        }
         exitRequestState.value = ExitRequest(pendingCommit, entryProgress.value)
         removeCallbacks(dismissFallback)
         if (!ValueAnimator.areAnimatorsEnabled()) {

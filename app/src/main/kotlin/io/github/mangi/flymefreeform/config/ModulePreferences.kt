@@ -6,6 +6,9 @@ import android.content.ComponentName
 internal object ModulePreferences {
     const val GROUP = "module_runtime"
     const val KEY_MODULE_ENABLED = "enabled"
+    /** @author bomo 隐藏系统侧边栏浮标与滑动入口；默认延续本设备已验收的隐藏行为。 */
+    const val KEY_HIDE_NATIVE_SIDEBAR = "hide_native_sidebar_v1"
+    const val DEFAULT_HIDE_NATIVE_SIDEBAR = true
     const val KEY_LEFT_CORNER_ENABLED = "corner_left_enabled"
     const val KEY_RIGHT_CORNER_ENABLED = "corner_right_enabled"
     const val KEY_CORNER_TRIGGER_RANGE_DP = "corner_trigger_range_dp"

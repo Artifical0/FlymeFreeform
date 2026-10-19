@@ -127,7 +127,8 @@ internal class ColorOsSidebarClient(
     fun runTool(alias: String, clickX: Float = 0f, clickY: Float = 0f): Boolean {
         if (!SidebarProtocol.isValidToolAlias(alias)) return false
         return try {
-            worker.execute { sendToolRequest(alias, clickX, clickY) }
+            val requestedAt = SystemClock.uptimeMillis()
+            worker.execute { sendToolRequest(alias, clickX, clickY, requestedAt) }
             true
         } catch (exception: RuntimeException) {
             logFailure("SIDEBAR_TOOL_QUEUE_FULL", exception)
@@ -206,7 +207,8 @@ internal class ColorOsSidebarClient(
         handler.postDelayed({ requestToolCatalog(retry + 1) }, CATALOG_RETRY_INTERVAL_MS)
     }
 
-    private fun sendToolRequest(alias: String, clickX: Float, clickY: Float) {
+    /** @author bomo 保留用户/包/服务校验与FGS绑定时长，记录从排队到绑定完成的真实耗时。 */
+    private fun sendToolRequest(alias: String, clickX: Float, clickY: Float, requestedAt: Long) {
         try {
             val userId = ActivityManager::class.java.getMethod("getCurrentUser").invoke(null) as Int
             val user = UserHandle::class.java.getMethod("of", Int::class.javaPrimitiveType).invoke(null, userId) as UserHandle
@@ -222,6 +224,7 @@ internal class ColorOsSidebarClient(
                 object : ServiceConnection {
                     override fun onServiceConnected(name: ComponentName, service: IBinder) {
                         try {
+                            log(Log.INFO, "TOOL_BIND_READY alias=$alias ms=${SystemClock.uptimeMillis() - requestedAt}", null)
                             Messenger(service).send(
                                 SidebarProtocol.toolMessage(alias, uid, clickX, clickY, reply),
                             )

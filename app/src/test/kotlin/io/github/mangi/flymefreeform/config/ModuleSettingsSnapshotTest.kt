@@ -7,6 +7,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModuleSettingsSnapshotTest {
+    /** @author bomo 未配置的新键延续隐藏行为；显式关闭/再开启可落盘往返，不改变模块主开关。 */
+    @Test
+    fun nativeSidebarVisibilityRoundTripKeepsModuleState() {
+        val preferences = InMemoryPreferences()
+        assertTrue(ModuleSettingsSnapshot.readFrom(preferences).hideNativeSidebar)
+        for (hidden in listOf(false, true)) {
+            ModuleSettingsSnapshot(enabled = true, hideNativeSidebar = hidden)
+                .writeTo(preferences.edit()).commit()
+            val restored = ModuleSettingsSnapshot.readFrom(preferences)
+            assertEquals(hidden, restored.hideNativeSidebar)
+            assertTrue(restored.enabled)
+        }
+    }
+
+    /** @author bomo 配置推送编解码必须携带隐藏选项，防止其他设置保存时把关闭选项重置。 */
+    @Test
+    fun nativeSidebarVisibilitySurvivesConfigPush() {
+        for (hidden in listOf(false, true)) {
+            val snapshot = ModuleSettingsSnapshot(enabled = true, hideNativeSidebar = hidden)
+            assertEquals(snapshot, ConfigSnapshotCodec.decode(ConfigSnapshotCodec.encode(snapshot)))
+        }
+    }
+
     @Test
     fun missingKeysUseProductDefaults() {
         val snapshot = ModuleSettingsSnapshot.readFrom(InMemoryPreferences())

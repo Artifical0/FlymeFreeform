@@ -72,6 +72,42 @@ internal class ColorOsAllAppsWindow(
     private var displaySafe = IntArray(4)
     private var windowParams: WindowManager.LayoutParams? = null
 
+    // @author bomo 首帧门闩诊断：记录 addView 时刻、被拦下的帧数与原因，
+    // 放行时一次性打印。用于判定「面板空白/白屏」发生在门闩期间还是入场动画期间。
+    private var showAt = 0L
+    private var gateFrames = 0
+    private val gateReasons = LinkedHashSet<String>()
+
+    // @author bomo 首帧耗时分段：定位 addView→首帧 这几百毫秒究竟花在哪一段。
+    // addView=同步 addView 调用（ViewRootImpl 创建 + 首次 relayout 请求）
+    // attach=onAttachedToWindow / measure=首次 onMeasure / layout=首次 onLayout
+    private var addViewDoneAt = 0L
+    private var attachedAt = 0L
+    private var measuredAt = 0L
+    private var laidOutAt = 0L
+
+    /**
+     * @author bomo 本进程内第几个面板窗口（从 1 开始）。
+     * 用来判定 `addView→onAttachedToWindow` 那几百毫秒是**每次 addView 都付**的固有开销，
+     * 还是只有首次（WMS 为进程建立窗口/Surface）才付 —— 前者只能靠复用同一个窗口消除，
+     * 后者可以靠预热空窗口消除。判据：连续开两次面板，比较两次的 seq 与 attach 耗时。
+     */
+    private val seq = ++windowSeq
+
+    /** 分段耗时（相对 addView 时刻）；该阶段未发生返回 -1。 */
+    private fun elapsed(at: Long): Long = if (at == 0L) -1L else at - showAt
+
+    /**
+     * @author bomo 是否等首屏数据到位再放行首帧（默认关闭）。
+     * 数据由 SearchHelper 异步加载，放行过早会先出现一张空壳面板再填入条目 —— 表现为"闪一下白/空"。
+     * 开启后门闩会额外等数据，最多 [WAIT_DATA_TIMEOUT_MS] 毫秒（超时照常放行，绝不卡住面板）。
+     * 调参：`adb shell settings put global flymefreeform_wait_data 1`（下次打开面板生效）。
+     */
+    private val waitData =
+        runCatching {
+            Settings.Global.getInt(context.contentResolver, WAIT_DATA_KEY, 0)
+        }.getOrDefault(0) == 1
+
     /** `FLAG_BLUR_BEHIND` 与 `setBlurBehindRadius` 未在公开 SDK 导出，按名字反射获取。 */
     private val blurBehindFlag: Int? =
         runCatching {
@@ -86,6 +122,9 @@ internal class ColorOsAllAppsWindow(
     private val backCallback = OnBackInvokedCallback { back() }
     private val animation = Runnable { animateFrame() }
     private val timeout = Runnable { dismiss() }
+    /** @author bomo 透明帧未提交时仅清理，不让取屏工具截到模块内容。 */
+    private val hiddenFrameTimeout = Runnable { dispose() }
+    private var toolSelectedAt = 0L
     private val firstFrame = ViewTreeObserver.OnPreDrawListener { prepareFirstFrame() }
     private var waitingForFirstFrame = true
     private val root = object : FrameLayout(context) {
@@ -105,9 +144,20 @@ internal class ColorOsAllAppsWindow(
 
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
+            if (attachedAt == 0L) attachedAt = SystemClock.uptimeMillis()
             backDispatcher = findOnBackInvokedDispatcher()?.also {
                 it.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback)
             }
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            if (measuredAt == 0L) measuredAt = SystemClock.uptimeMillis()
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
+
+        override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+            super.onLayout(changed, left, top, right, bottom)
+            if (laidOutAt == 0L && right > left && bottom > top) laidOutAt = SystemClock.uptimeMillis()
         }
 
         override fun onDetachedFromWindow() {
@@ -159,10 +209,10 @@ internal class ColorOsAllAppsWindow(
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
             setFitInsetsTypes(0)
             title = "FlymeFreeformAllApps"
-            blurBehindFlag?.let { flags = flags or it }
-            blurRadiusSetter?.let { setter ->
-                runCatching { setter.invoke(this, tunedInt(BLUR_RADIUS_KEY, BLUR_BEHIND_RADIUS_PX)) }
-            }
+            // @author bomo 不再在 addView 时预设窗口级模糊。
+            // 实测（0.2.14 埋点）：窗口 addView 到首帧绘制完成有约 467ms 空窗期，
+            // 期间 FLAG_BLUR_BEHIND 已生效而内容为空 → 合成器把空窗口画成白底，即「唤起闪白」。
+            // 改为首帧放行、内容就位后，仅在平台玻璃附着失败时才补开窗口模糊（见 enableWindowBlur）。
         }
         // @author bomo 面板整体缩小：内容必须按原生尺寸布局（网格条目是固定 dp，直接缩窗会挤压变形），
         // 卡片保持原生 LayoutParams，再由 applyBaseTransform() 等比缩放贴满缩小后的窗口。
@@ -182,7 +232,11 @@ internal class ColorOsAllAppsWindow(
     fun show() {
         check(!attached && !closed)
         val params = windowParams ?: error("ALL_APPS_WINDOW_PARAMS_UNAVAILABLE")
+        showAt = SystemClock.uptimeMillis()
+        gateFrames = 0
+        gateReasons.clear()
         manager.addView(root, params)
+        addViewDoneAt = SystemClock.uptimeMillis()
         attached = true
         root.viewTreeObserver.addOnPreDrawListener(firstFrame)
         root.requestApplyInsets()
@@ -192,15 +246,35 @@ internal class ColorOsAllAppsWindow(
     private fun prepareFirstFrame(): Boolean {
         if (closed) return true
         if (!waitingForFirstFrame) return true
+        gateFrames++
+        // @author bomo 每帧重新评估当前阻塞条件，已恢复的布局/数据不能永久卡住首帧。
+        gateReasons.clear()
         return try {
             // 卡片按原生面板尺寸（自身 LayoutParams）布局完成即就绪；窗口已缩小，不能再与窗口尺寸比较。
             val cardParams = card.layoutParams as FrameLayout.LayoutParams
-            if (root.width <= 0 || root.height <= 0 || insets == null ||
-                card.isLayoutRequested || card.width != cardParams.width || card.height != cardParams.height ||
-                !content.attachBlur()
-            ) return false
-            // 平台背景模糊已生效时关闭窗口级模糊，避免双重模糊与额外开销。
-            if (content.platformGlass) disableWindowBlur()
+            // @author bomo 逐项收集未就绪原因：放行时一次打印，
+            // 即可区分「窗口布局没好」「数据没到」「模糊没附着」三类空白。
+            if (root.width <= 0 || root.height <= 0) gateReasons += "rootSize"
+            if (insets == null) gateReasons += "insets"
+            if (card.isLayoutRequested || card.width != cardParams.width || card.height != cardParams.height) {
+                gateReasons += "cardLayout"
+            }
+            val items = content.itemCount()
+            val dataTimedOut = SystemClock.uptimeMillis() - showAt >= WAIT_DATA_TIMEOUT_MS
+            if (waitData && items <= 0 && !dataTimedOut) gateReasons += "noData"
+            if (!content.attachBlur()) gateReasons += "blur"
+            if (gateReasons.isNotEmpty()) return false
+            // 平台玻璃附着失败才补开窗口级模糊；此时内容已就位，不会出现空窗口白底。
+            if (!content.platformGlass) enableWindowBlur()
+            // @author bomo 首帧放行判据：frames=1 说明窗口首帧就位；ms 即 addView→首帧的空窗期，
+            // 是面板唤起延迟的主要构成。windowBlur 指放行后是否会启用窗口级模糊。
+            log(
+                Log.INFO,
+                "FIRST_FRAME_RELEASED seq=$seq ms=${elapsed(SystemClock.uptimeMillis())} addView=${elapsed(addViewDoneAt)} " +
+                    "attach=${elapsed(attachedAt)} measure=${elapsed(measuredAt)} layout=${elapsed(laidOutAt)} " +
+                    "frames=$gateFrames glass=${content.platformGlass} items=$items waitData=$waitData",
+                null,
+            )
             applyBaseTransform()
             val initial = AllAppsPanelMotion.enter(0f)
             card.scaleX = initial.scale * panelScale
@@ -226,6 +300,7 @@ internal class ColorOsAllAppsWindow(
     fun beginItemClick(afterHidden: (() -> Unit)? = null): Boolean {
         if (!isShown()) return false
         hiddenAction = afterHidden
+        if (afterHidden != null) toolSelectedAt = SystemClock.uptimeMillis()
         dismiss()
         return true
     }
@@ -241,7 +316,8 @@ internal class ColorOsAllAppsWindow(
             return
         }
         context.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(root.windowToken, 0)
-        startAnimation()
+        // @author bomo 工具交接直接提交不可见帧；普通关闭仍保留原退场动画。
+        if (hiddenAction != null) finishExit() else startAnimation()
     }
 
     fun dispose() {
@@ -251,6 +327,7 @@ internal class ColorOsAllAppsWindow(
         hiddenAction = null
         root.removeCallbacks(animation)
         root.removeCallbacks(timeout)
+        root.removeCallbacks(hiddenFrameTimeout)
         try {
             content.close()
         } catch (exception: Exception) {
@@ -352,16 +429,24 @@ internal class ColorOsAllAppsWindow(
         card.translationY = -card.height * (1f - panelScale) / 2f
     }
 
-    private var windowBlurDisabled = false
+    private var windowBlurEnabled = false
 
-    /** 平台玻璃接管后，清掉窗口参数里的 BLUR_BEHIND 标志并立即生效（只执行一次）。 */
-    private fun disableWindowBlur() {
-        if (windowBlurDisabled) return
-        windowBlurDisabled = true
+    /**
+     * @author bomo 仅在平台玻璃附着失败时才启用窗口级模糊，且**必须在首帧内容绘制完成后**再开：
+     * FLAG_BLUR_BEHIND 若在 addView 时就带在窗口参数里，窗口会先于内容进入合成器，
+     * 空窗期（实测 addView→首帧约 467ms）被合成器画成白底 —— 这正是「面板唤起闪白」。
+     * 首帧放行后内容已就位，此时补开模糊不会出现空白帧（只执行一次）。
+     */
+    private fun enableWindowBlur() {
+        if (windowBlurEnabled) return
+        windowBlurEnabled = true
         val flag = blurBehindFlag ?: return
         val params = windowParams ?: return
-        if (params.flags and flag == 0) return
-        params.flags = params.flags and flag.inv()
+        if (params.flags and flag != 0) return
+        params.flags = params.flags or flag
+        blurRadiusSetter?.let { setter ->
+            runCatching { setter.invoke(params, tunedInt(BLUR_RADIUS_KEY, BLUR_BEHIND_RADIUS_PX)) }
+        }
         if (attached) runCatching { manager.updateViewLayout(root, params) }
     }
 
@@ -403,6 +488,9 @@ internal class ColorOsAllAppsWindow(
         card.scaleX = panelScale
         card.scaleY = panelScale
         content.updateBlur(1f)
+        // @author bomo 入场动画收尾时刻：与 FIRST_FRAME_RELEASED 的 ms 相减即入场动画实际耗时，
+        // 用于判断"白/空"是被门闩拖长还是被动画拖长。
+        log(Log.INFO, "PANEL_ENTER_DONE ms=${SystemClock.uptimeMillis() - showAt}", null)
         if (!notified) {
             notified = true
             onShown()
@@ -420,17 +508,27 @@ internal class ColorOsAllAppsWindow(
             return
         }
         // 先提交不可见帧，再执行原厂工具；短暂保留窗口所有权供系统判断前台发起者。
-        root.postOnAnimation {
+        root.postDelayed(hiddenFrameTimeout, SidebarProtocol.CLEANUP_TIMEOUT_MS)
+        val dispatch = Runnable {
             safely {
+                root.removeCallbacks(hiddenFrameTimeout)
                 if (closed) return@safely
                 beforeTool {
                     safely {
                         if (closed) return@safely
+                        log(Log.INFO, "TOOL_PANEL_HIDDEN ms=${SystemClock.uptimeMillis() - toolSelectedAt}", null)
                         action()
                         root.postOnAnimation { if (!closed) dispose() }
                     }
                 }
             }
+        }
+        // @author bomo postOnAnimation 发生于绘制前；硬件渲染必须确认提交后才调用工具。
+        if (root.isHardwareAccelerated) {
+            root.viewTreeObserver.registerFrameCommitCallback { root.post(dispatch) }
+            root.invalidate()
+        } else {
+            root.postOnAnimation { root.postOnAnimation(dispatch) }
         }
     }
 
@@ -458,6 +556,9 @@ internal class ColorOsAllAppsWindow(
         }.getOrDefault(fallback)
 
     private companion object {
+        /** @author bomo 本进程已创建的面板窗口数；仅供首帧埋点打序号用。 */
+        var windowSeq = 0
+
         /** 窗口模糊回退路径的模糊半径（像素）默认值；对齐原生 integer/edit_panel_platform_blur_radius=300。 */
         const val BLUR_BEHIND_RADIUS_PX = 300
         const val BLUR_RADIUS_KEY = "flymefreeform_blur_radius"
@@ -468,5 +569,11 @@ internal class ColorOsAllAppsWindow(
          * [ModulePreferences.MAX_PANEL_SCALE_PERCENT]，不再在本类重复定义。
          */
         const val PANEL_SCALE_KEY = "flymefreeform_panel_scale"
+
+        /** @author bomo 首帧门闩是否等首屏数据（1=等）；诊断/对照用。 */
+        const val WAIT_DATA_KEY = "flymefreeform_wait_data"
+
+        /** 等数据的最长时间；超时照常放行，面板绝不会被数据加载卡住。 */
+        const val WAIT_DATA_TIMEOUT_MS = 400L
     }
 }

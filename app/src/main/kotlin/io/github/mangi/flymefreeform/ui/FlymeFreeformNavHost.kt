@@ -31,6 +31,8 @@ internal fun FlymeFreeformNavHost(
     onModuleEnabledChange: (Boolean) -> Unit,
     onLeftCornerEnabledChange: (Boolean) -> Unit,
     onRightCornerEnabledChange: (Boolean) -> Unit,
+    /** @author bomo 设置系统原生侧边栏入口的可见/可触发状态。 */
+    onHideNativeSidebarChange: (Boolean) -> Unit,
     onCornerTriggerRangeChange: (Int) -> Unit,
     /** @author bomo 触发热区形状（扇形 / 三角形）变更。 */
     onTriggerShapeChange: (TriggerShape) -> Unit,
@@ -79,6 +81,7 @@ internal fun FlymeFreeformNavHost(
                         onModuleEnabledChange = onModuleEnabledChange,
                         onLeftCornerEnabledChange = onLeftCornerEnabledChange,
                         onRightCornerEnabledChange = onRightCornerEnabledChange,
+                        onHideNativeSidebarChange = onHideNativeSidebarChange,
                         onCornerTriggerRangeChange = onCornerTriggerRangeChange,
                         onTriggerShapeChange = onTriggerShapeChange,
                         onTriggerHorizontalDpChange = onTriggerHorizontalDpChange,

@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 
 internal data class ModuleSettingsSnapshot(
     val enabled: Boolean = ModulePreferences.DEFAULT_ENABLED,
+    /** @author bomo 系统侧边栏入口隐藏选项，与 Flyme 自身震动和工具执行独立。 */
+    val hideNativeSidebar: Boolean = ModulePreferences.DEFAULT_HIDE_NATIVE_SIDEBAR,
     val leftCornerEnabled: Boolean = ModulePreferences.DEFAULT_CORNER_ENABLED,
     val rightCornerEnabled: Boolean = ModulePreferences.DEFAULT_CORNER_ENABLED,
     val cornerTriggerRangeDp: Int = ModulePreferences.DEFAULT_CORNER_TRIGGER_RANGE_DP,
@@ -39,6 +41,7 @@ internal data class ModuleSettingsSnapshot(
     fun writeTo(editor: SharedPreferences.Editor): SharedPreferences.Editor {
         editor
             .putBoolean(ModulePreferences.KEY_MODULE_ENABLED, enabled)
+            .putBoolean(ModulePreferences.KEY_HIDE_NATIVE_SIDEBAR, hideNativeSidebar)
             .putBoolean(ModulePreferences.KEY_LEFT_CORNER_ENABLED, leftCornerEnabled)
             .putBoolean(ModulePreferences.KEY_RIGHT_CORNER_ENABLED, rightCornerEnabled)
             .putBoolean(ModulePreferences.KEY_PAUSE_IN_LANDSCAPE, pauseInLandscape)
@@ -177,6 +180,10 @@ internal data class ModuleSettingsSnapshot(
                     } else {
                         emptyList()
                     },
+                hideNativeSidebar = preferences.getBoolean(
+                    ModulePreferences.KEY_HIDE_NATIVE_SIDEBAR,
+                    ModulePreferences.DEFAULT_HIDE_NATIVE_SIDEBAR,
+                ),
                 leftCornerEnabled = leftEnabled,
                 rightCornerEnabled = rightEnabled,
                 cornerTriggerRangeDp = cornerTriggerRangeDp,
