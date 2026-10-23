@@ -17,6 +17,7 @@
 > 安装前需先卸载其他来源的版本。
 > 另移植 [Minessential 的横屏 / 游戏模式防误触](https://github.com/Mangi-11/FlymeFreeform/pull/6)（提交 `316d737`）：
 > 关闭对应的「暂停」后可开启，首次滑动提示「请再划一次」，2 秒内同侧再划才唤出菜单。
+> 本分支的新版本和构建结果会推送到 Telegram 频道 [@ByteJuno](https://t.me/ByteJuno)，欢迎关注。
 
 > **本仓库是二次开发版（衍生版本），非原作者发布。**
 >
