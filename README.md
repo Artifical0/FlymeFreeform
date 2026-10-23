@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/libxposed-API_102-4285F4" alt="libxposed API 102" />
 </p>
 
-> **Artifical0 分支说明**：在 [Sillybomo/FlymeFreeform](https://github.com/Sillybomo/FlymeFreeform)（ColorOS 17 适配版）基础上，
+> **ByteJuno 分支说明**：在 [Sillybomo/FlymeFreeform](https://github.com/Sillybomo/FlymeFreeform)（ColorOS 17 适配版）基础上，
 > 移植 [Yunnijian/FlymeFreeform@0405d81](https://github.com/Yunnijian/FlymeFreeform/commit/0405d81)
 > 「角落手势按下即独占，未选中时补发点击」，修复角落上滑同时触发系统上滑手势（应用被退到后台）。
 > 代价：角落热区内的系统手势一并被抑制，建议把热区调小。APK 由本仓库 Actions 构建并用本仓库密钥签名，
